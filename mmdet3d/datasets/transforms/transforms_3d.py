@@ -661,6 +661,8 @@ class GlobalRotScaleTrans(BaseTransform):
         shift_height (bool): Whether to shift height.
             (the fourth dimension of indoor points) when scaling.
             Defaults to False.
+
+    作用: 依次对点云/bbox 进行旋转/缩放/平移操作
     """
 
     def __init__(self,

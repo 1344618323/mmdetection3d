@@ -23,6 +23,14 @@ def limit_period(val: Union[np.ndarray, Tensor],
     Returns:
         np.ndarray or Tensor: Value in the range of
         [-offset * period, (1-offset) * period].
+     
+    val' = val - floor(val/period + offset) * period
+    怎么记忆这个公式? floor(val/period + offset) 用于计算 val 完整转了几个圈, 
+    注意转圈的起点是offset, 如果是0.5, 则转圈的起点是 0.5*period.
+    val' = val - 完整转了几个圈 * period
+
+    若offset=0.5, period=np.pi, 则将val限制在[-np.pi/2, np.pi/2]范围内
+    若offset=0, period=np.pi, 则将val限制在[0, np.pi]范围内
     """
     limited_val = val - torch.floor(val / period + offset) * period
     return limited_val

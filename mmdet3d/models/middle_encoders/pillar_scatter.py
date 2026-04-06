@@ -16,6 +16,14 @@ class PointPillarsScatter(nn.Module):
     Args:
         in_channels (int): Channels of input features.
         output_shape (list[int]): Required output shape of features.
+
+    in_channels: 经过encoder后得到的特征维度
+    output_shape: BEV网格的形状, 注意必须要 self.nx = range_x/voxel_x, self.ny = range_y/voxel_y
+    注意forward中的 canvas[:, indices] = voxels 这步操作, 会将属于同一个canvas_x/y的特征写入
+    注意如果发生有特征属于同一个canvas_x/y的情况(除非是程序员故意为之, 否则这是错误的), 会发生覆盖现象(且顺序不确定, 这一点等待考证)
+    
+    输入 [M, C]
+    输出 [B, C, self.ny, self.nx]
     """
 
     def __init__(self, in_channels: int, output_shape: List[int]):

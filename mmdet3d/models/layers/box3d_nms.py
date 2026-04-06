@@ -43,6 +43,10 @@ def box3d_multiclass_nms(
         Tuple[Tensor]: Return results after nms, including 3D bounding boxes,
         scores, labels, direction scores, attribute scores (optional) and
         2D bounding boxes (optional).
+
+    -----------------------
+    for i in range(0, num_classes) 这个循环 分别对每个类做nms
+    bboxes: 所有类nms的结果concat到一起的结果
     """
     # do multi class nms
     # the fg class id range: [0, num_classes-1]

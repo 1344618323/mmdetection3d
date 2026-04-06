@@ -40,6 +40,53 @@ class Max3DIoUAssigner(MaxIoUAssigner):
             assign. When the number of gt is above this threshold, will assign
             on CPU device. Negative values mean not assign on CPU.
         iou_calculator (dict): Config of overlaps Calculator.
+
+    函数注释有错误, 以我的解读为准
+    -1 忽略
+    0 背景(负样本)
+    1-N 正样本(值为GT的1-based索引,1对应GT[0],2对应GT[1],...)
+
+    self.iou_calculator 的类型可以是 self.iou_calculator BboxOverlapsNearest3D
+
+    总结: 使用gt bev aabb1 和 pred bev aabb2 计算2D IoU.
+    然后通过iou阈值做gt和pred的匹配. 可能出现多个pred匹配到同一个gt 或者 一个gt没有被任何pred匹配到 的情况
+
+    --------------------------------------------------------
+    self.assign_wrt_overlaps 源码在 /opt/conda/lib/python3.8/site-packages/mmdet/models/task_modules/assigners/max_iou_assigner.py 中
+
+    overlaps (k, n) k个gt, n个pred的IoU
+    max_overlaps, argmax_overlaps 每个pred对应的最大iou和其对应的gt索引
+    gt_max_overlaps, gt_argmax_overlaps 每个gt对应的最大iou和其对应的pred索引
+
+    step1: assigned_gt_inds[i] = -1, 即每个pred都是忽略的
+
+    step2: 
+    对于 0<=max_overlaps[i]<neg_iou_thr, 则 assigned_gt_inds[i] = 0, 即该pred是负样本
+    或者是 neg_iou_thr[0] <= max_overlaps[i] < neg_iou_thr[1], 则 assigned_gt_inds[i] = 0, 
+        也就说对于iou特别低的pred, 我们会将其只其忽略,而不是作为负样本
+
+    step3:
+    对于max_overlaps[i]>=pos_iou_thr, 则 assigned_gt_inds[i] = argmax_overlaps[i] + 1, 即该pred是正样本
+
+    IoU:-inf    neg_thr[0]    neg_thr[1]   pos_thr         1
+    举例值           0          0.3          0.6
+        |-----------|-----------|-----------|-------------|
+          忽略(-1)     负样本(0)    忽略(-1)     正样本(>0)
+
+    可以发现 argmax_overlaps[i] 的赋值是不排它的, 一个gt可能被多个pred匹配到
+
+    step4:
+    若使能了self.match_low_quality
+    则对于每个gt, 若gt_max_overlaps[i]>=self.min_pos_iou(如0.3),则将与其有最大iou的pred赋值为i+1, 即该gt是正样本.
+    这么做的目的是为了尽可能多地让gt被匹配到
+
+    返回: AssignResult(
+        num_gts=num_gts, 即gt的个数
+        gt_inds=assigned_gt_inds, 即每个pred对应的gt索引, -1表示忽略, 0表示背景, >0表示正样本
+        max_overlaps=max_overlaps, 即每个pred对应的最大iou
+        labels=assigned_labels 即每个pred对应的gt标签, -1表示没有(没有区分忽略和背景), >=0 表示类型(0-based)
+    )
+    --------------------------------------------------------
     """
 
     def __init__(

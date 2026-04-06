@@ -47,6 +47,18 @@ def to_tensor(
 
 @TRANSFORMS.register_module()
 class Pack3DDetInputs(BaseTransform):
+    """
+    把前面各步得到的 results 字典，整理成模型和 MMEngine 期望的格式：
+    * inputs：模型前向用的输入（如 points、img）。
+    * data_samples：一个 Det3DDataSample，里面包含：
+        * metainfo：从 meta_keys 收集的元信息（外参、图像尺寸、增强标志等），支持单视角/多视角/纯 LiDAR 等来源；
+        * gt_instances_3d：3D 真值（如 gt_bboxes_3d、gt_labels_3d、depths、centers_2d 等）；
+        * gt_instances：2D 真值（如 gt_bboxes、gt_bboxes_labels）；
+        * gt_pts_seg：点级标注（如 pts_instance_mask、pts_semantic_mask、gt_semantic_seg）；
+        * eval_ann_info：评估用标注（若有）。
+    额外处理：在打包前会把部分字段转成 Tensor（如 bbox、label、mask 等），图像会做 HWC→CHW 等格式转换。
+    """
+
     INPUTS_KEYS = ['points', 'img']
     INSTANCEDATA_3D_KEYS = [
         'gt_bboxes_3d', 'gt_labels_3d', 'attr_labels', 'depths', 'centers_2d'

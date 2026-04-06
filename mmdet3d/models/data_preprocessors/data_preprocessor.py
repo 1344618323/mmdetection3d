@@ -81,6 +81,17 @@ class Det3DDataPreprocessor(DetDataPreprocessor):
             data to device. Defaults to False.
         batch_augments (List[dict], optional): Batch-level augmentations.
             Defaults to None.
+    
+    图像：
+        图像从 CPU 转到 cuda
+        按需做 BGR<->RGB
+        减均值除方差归一化
+        (TO READ) padding 到 batch 内最大尺寸再 stack 成 batch tensor，并可做 batch 级数据增强。
+    点云：
+        点云从 CPU 转到 cuda
+        体素化
+    
+    这个类中没有任何学习参数
     """
 
     def __init__(self,
@@ -357,6 +368,16 @@ class Det3DDataPreprocessor(DetDataPreprocessor):
               where 1 represents the batch index.
             - num_points (Tensor, optional): Number of points in each voxel.
             - voxel_centers (Tensor, optional): Centers of voxels.
+
+        根据voxel_type配置，进行不同的voxelization操作
+
+        1. 我们先关注 "hard", 是最经典的体素化方式, SECOND/PointPillars 默认使用的体素方式.
+            预先设定每个体素的点上限, 超出上限的点会被丢弃; 如果没超过上限, 则补0. 另外也预先设定了体素的总数, 超出的体素会被丢弃.
+            最后输出
+            voxel_dict['voxels'] 是 [M_total, max_points, C] 的tensor, 其中 M_total = sum_i M_i, M_i是第i个样本的体素数量, C是每个点的特征维度.
+            voxel_dict['coors'] 是 [M_total, 4] 的tensor, 其中 M_total = sum_i M_i, 存的是体素的索引坐标, 顺序是 (batch_idx,z_idx,y_idx,x_idx)
+            voxel_dict['num_points'] 是 [M_total] 的tensor, 其中  M_total = sum_i M_i, 每个体素的点数
+            voxel_dict['voxel_centers'] 是 [M_total, 3] 的tensor, 其中 M_total = sum_i M_i, 每个体素中心的坐标(x,y,z)
         """
 
         voxel_dict = dict()

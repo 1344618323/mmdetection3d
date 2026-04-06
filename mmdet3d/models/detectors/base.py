@@ -70,6 +70,24 @@ class Base3DDetector(BaseDetector):
             - If ``mode="tensor"``, return a tensor or a tuple of tensor.
             - If ``mode="predict"``, return a list of :obj:`Det3DDataSample`.
             - If ``mode="loss"``, return a dict of tensor.
+
+        "tensor" mode: 只关心网络计算出的tensor, 用于作蒸馏, 可视化中间特征, 级联给别的模块, 不做nms/decode/格式包装
+        "predict" mode: 会作nms/decode/格式包装
+            有时我们会在test_pipeline中加入TTA, 这时 
+            data_samples 的结构: List[List[Det3DDataSample]]
+                                │         │
+                                │         └── 内层 list: batch 维度
+                                └── 外层 list: augmentation 维度
+            且强制要求batch_size=1
+            这时会进入 self.aug_test 分支
+
+            如果正常test(同train),则
+            data_samples 的结构: List[Det3DDataSample]
+                                │
+                                └── list: batch 维度
+            这时会进入 self.predict 分支
+            
+        "loss" mode: 既要前向, 也要根据gt算loss
         """
         if mode == 'loss':
             return self.loss(inputs, data_samples, **kwargs)

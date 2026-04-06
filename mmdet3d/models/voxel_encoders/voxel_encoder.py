@@ -141,6 +141,15 @@ class DynamicVFE(nn.Module):
         self._with_voxel_center = with_voxel_center
         self.return_point_feats = return_point_feats
 
+        """
+        后续会用于计算真实坐标系里的体素中心，公式为：
+        x = coor_x*vx+x_offset, y = coor_y*vy+y_offset, z = coor_z*vz+z_offset
+        比如xrange = -0.375~0.375, vx=0.25
+        x_offset = -0.375 + 0.25/2 = -0.25
+        coor_x=0, x = 0*0.25-0.25 = -0.25
+        coor_x=1, x = 1*0.25-0.25 = 0
+        coor_x=2, x = 2*0.25-0.25 = 0.25
+        """
         # Need pillar (voxel) size and x/y offset in order to calculate offset
         self.vx = voxel_size[0]
         self.vy = voxel_size[1]
@@ -312,6 +321,13 @@ class HardVFE(nn.Module):
             used in multi-modal detectors. Defaults to None.
         return_point_feats (bool, optional): Whether to return the
             features of each points. Defaults to False.
+
+    核心: 对体素内点特征作若干层 Voxel feature encoding layer(点级MLP+BN+Relu, 再做体素级MaxPooling), 得到体素级特征. 详细见 forward 函数.
+
+    vfe_layers 即多层 Voxel feature encoding layer
+
+    Voxel feature encoding layer 见论文 https://arxiv.org/abs/1711.06396 VoxelNet: End-to-End Learning for Point Cloud Based 3D Object Detection
+    的 Figure 3. 
     """
 
     def __init__(self,
@@ -402,10 +418,37 @@ class HardVFE(nn.Module):
             tuple: If `return_point_feats` is False, returns voxel features and
                 its coordinates. If `return_point_feats` is True, returns
                 feature of each points inside voxels.
+
+        feature_ls 根据配置增加维度
+        源 features [M, N, C] M个体素, 体素内最大点数N, 点特征维度C
+        with_cluster_center: 增加f_cluster [M, N, 3] 体素内所有点与体素均值的差值
+        with_voxel_center: 增加f_center [M, N, 3] 体素内所有点与体素中心坐标的差值
+        with_distance: 增加points_dist [M, N, 1] 体素内所有点与原点的距离
+        最后 cat 在一起 得到 voxel_feats
+        mask [M, N] 若对应值是true, 则该点有效; 若为false, 则该位置无点
+        因此有 voxel_feats = voxel_feats * mask.unsqueeze(-1).type_as(voxel_feats), 即最初的输入
+
+        输入会通过几层(看配置,假设L层) vfelayer(voxel feature encoder layer), 得到体素级特征[M, out]
+        前L-1层 [M, N, in] -> vfe -> M, N, 2*out 注意其中使用的linearlayer参数为(in, out)
+            MLP+BN+Relu后得到 [M,N,out], 
+            然后进行max pooling, 得到[M, 1, out]
+            (MLP结果) concat (repeat N 份池化后的结果) 得到 [M, N, 2*out]
+            BN+Relu
+            这个2*out会作为下一层vfe的in
+
+        最后一层 [M, N, in] -> vfe -> [M, out] 注意其中使用的linearlayer参数为(in, out)
+            MLP+BN+Relu后得到 [M,N,out], 然后进行max pooling, 得到[M, out]
+
+        TODO: fusion_layer 的相关处理还没看到, 暂时跳过
         """
         features_ls = [features]
         # Find distance of x, y, and z from cluster center
         if self._with_cluster_center:
+            """
+            features [M, N, C] M是整个批次的体素数量, N体素内最大点数, C xyzi4维
+            points_mean [M, 1, 3] 体素内所有点的xyz平均值
+            f_cluster [M, N, 3] 体素内所有点与体素均值的差值
+            """
             points_mean = (
                 features[:, :, :3].sum(dim=1, keepdim=True) /
                 num_points.type_as(features).view(-1, 1, 1))
@@ -415,6 +458,10 @@ class HardVFE(nn.Module):
 
         # Find distance of x, y, and z from pillar center
         if self._with_voxel_center:
+            """
+            f_center [M, N, 3] 体素内所有点与体素中心坐标的差值
+            coors[:, 3].type_as(features).unsqueeze(1) * self.vx + self.x_offset 体素中心x坐标
+            """
             f_center = features.new_zeros(
                 size=(features.size(0), features.size(1), 3))
             f_center[:, :, 0] = features[:, :, 0] - (
@@ -429,6 +476,10 @@ class HardVFE(nn.Module):
             features_ls.append(f_center)
 
         if self._with_distance:
+            """
+            points_dist [M, N, 1] 体素内所有点与原点的距离
+            两个2的意思是: 2范数, dim=2
+            """
             points_dist = torch.norm(features[:, :, :3], 2, 2, keepdim=True)
             features_ls.append(points_dist)
 

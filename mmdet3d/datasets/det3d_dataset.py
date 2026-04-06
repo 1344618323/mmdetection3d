@@ -104,6 +104,11 @@ class Det3DDataset(BaseDataset):
         if metainfo is not None and 'classes' in metainfo:
             # we allow to train on subset of self.METAINFO['classes']
             # map unselected labels to -1
+            """
+            self.METAINFO['classes'] 中写入的是数据集中的原始种类.
+            而在cfgfile中写 metainfo['classes'] 时，可以写一个子集, 所以
+            self.label_mapping = {类型在self.METAINFO['classes']中idx: 类型在metainfo['classes']中idx}
+            """
             self.label_mapping = {
                 i: -1
                 for i in range(len(self.METAINFO['classes']))

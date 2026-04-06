@@ -79,6 +79,41 @@ class Base3DDenseHead(BaseModule, metaclass=ABCMeta):
 
         Returns:
             dict: A dictionary of loss components.
+
+        以pointpillars为例
+        输入x为
+        [
+            [B, C, ny, nx] 如 [1, 256, 200, 200]
+            [B, C, ny/2, nx/2]
+            [B, C, ny/4, nx/4]
+        ]
+        设定num_classes = 10, box_code_size = 9, num_rot = 2, num_size = 4 (num_anchors = num_rot * num_size = 8)
+        outs 是个tuple, (cls_scores, bbox_preds, dir_cls_preds)
+        cls_scores 为 [[B, num_anchors * num_classes, ny, nx], [B, num_anchors * num_classes, ny/2, nx/2], [B, num_anchors * num_classes, ny/4, nx/4]]
+        bbox_preds 为 [[B, num_anchors * box_code_size, ny, nx], [B, num_anchors * box_code_size, ny/2, nx/2], [B, num_anchors * box_code_size, ny/4, nx/4]]
+        dir_cls_preds 为 [[B, num_anchors * 2, ny, nx], [B, num_anchors * 2, ny/2, nx/2], [B, num_anchors * 2, ny/4, nx/4]]
+        
+        具体数值案例
+        -----
+        torch.Size([1, 80, 200, 200])
+        torch.Size([1, 80, 100, 100])
+        torch.Size([1, 80, 50, 50])
+        -----
+        torch.Size([1, 72, 200, 200])
+        torch.Size([1, 72, 100, 100])
+        torch.Size([1, 72, 50, 50])
+        -----
+        torch.Size([1, 16, 200, 200])
+        torch.Size([1, 16, 100, 100])
+        torch.Size([1, 16, 50, 50])
+        -----
+
+        关注下data_sample, 即一帧的标注信息
+        metainfo 中有 图像尺寸, 点云范围, 增强参数, 坐标转换
+        gt_instances_3d 中是 list [3D框, 类别]
+
+        最后的loss_inputs是个长度为6的tuple, 分别是
+        (cls_scores, bbox_preds, dir_cls_preds, batch_gt_instances_3d, batch_input_metas, batch_gt_instances_ignore)
         """
         outs = self(x)
 
@@ -224,6 +259,16 @@ class Base3DDenseHead(BaseModule, metaclass=ABCMeta):
             - bboxes_3d (BaseInstance3DBoxes): Prediction of bboxes,
               contains a tensor with shape (num_instances, C), where
               C >= 7.
+        
+        -----------------------
+        输入的是一个批次的featuremap
+
+        每个样本的预测结果会分别进入 _predict_by_feat_single 处理
+        cls_score_list 是list, 长度为num_levels, 每个元素是 (num_anchors * num_classes, H, W), 其中 num_anchors = num_rot * num_size
+        bbox_pred_list 是list, 长度为num_levels, 每个元素是 (num_anchors * box_code_size, H, W)
+        dir_cls_pred_list 是list, 长度为num_levels, 每个元素是 (num_anchors * 2, H, W)
+        
+        最后得到的是一个list, 长度为batch_size, 每个元素是 InstanceData（表示一个样本的预测结果）
         """
         assert len(cls_scores) == len(bbox_preds)
         assert len(cls_scores) == len(dir_cls_preds)
@@ -301,6 +346,22 @@ class Base3DDenseHead(BaseModule, metaclass=ABCMeta):
                   (num_instances, ).
                 - bboxes (Tensor): Has a shape (num_instances, 4),
                   the last dimension 4 arrange as (x1, y1, x2, y2).
+
+        -----------------------
+        总的来说，这个函数就是通过score max+ nms（2dbbox带旋转） 筛选出pred的bbox
+
+        在zip(cls_score_list, ...)中，会分别对每个level的预测结果做处理
+        mlvl_bboxes 是list, 长度为num_levels, 每个元素是 (num_anchors, box_code_size)
+            来源：对于每个level,会分别求每个anchor分最高的那个类，即(320000, 10)->(32000, );再算其中最高分的那 nms_pre 个anchor,即(1000,)
+        
+        mlvl_bboxes: 即所有层，分最高的那(num_levels*nms_pre) 个bbox, 尺寸(num_levels*nms_pre, box_code_size)
+        mlvl_bboxes_for_nms: (num_levels*nms_pre, 5) 5维是(x1,y1,x2,y2,r)
+        mlvl_scores: (num_levels*nms_pre, cls+1) 最后一维是背景类
+        mlvl_dir_scores: (num_levels*nms_pre, ) 对于每个bbox，会取其最高的那个方向, 虽然变量名写的是score，但实际是高分的那个索引，即方向
+
+        mlvl是multi-level的缩写
+
+        在box3d_multiclass_nms(mlvl_bboxes, mlvl_bboxes_for_nms, ...)中，会先在各个类内做nms，然后concat到一起
         """
         cfg = self.test_cfg if cfg is None else cfg
         assert len(cls_score_list) == len(bbox_pred_list) == len(mlvl_priors)

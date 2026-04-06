@@ -36,6 +36,24 @@ class BaseInstance3DBoxes:
             (x, y, z, x_size, y_size, z_size, yaw, ...).
         with_yaw (bool): If True, the value of yaw will be set to 0 as minmax
             boxes.
+    
+    ------------------------------------------------------------
+    构造时输入的tensor是(x,y,z,x_size,y_size,z_size,yaw,...) (尺寸N*7, 注意是>=7),  
+    以及 origin(0.5,0.5,0) for kitti, 即z是cuboid地面中心点; 或者 origin(0.5,1.0,0.5) for nuscenes, 即z是cuboid的中心点.
+    在构造成BaseInstance3DBoxes对象时,会统一转成(0.5,0.5,0)模式, 即self.tensor的z是cuboid地面中心点, 
+    如 mmdet3d/datasets/nuscenes_dataset.py中 NuScenesDataset.parse_ann_info 所作
+    
+    几个API:
+    volume: (N, ) 每个cuboid的体积
+    dims: (N, 3) 每个cuboid的尺寸
+    yaw: (N, ) 每个cuboid的yaw
+    height: (N, ) 每个cuboid的高度
+    top_height: (N, ) 每个cuboid的顶部高度
+    bottom_height: (N, ) 每个cuboid的底部高度
+    center: (N, 3) 每个cuboid的中心点
+    bottom_center: (N, 3) 每个cuboid的底部中心点
+    gravity_center: (N, 3) 每个cuboid的重心点
+    bev: (N, 5) 每个cuboid的bevbox(x,y,w,h,yaw)
     """
 
     YAW_AXIS: int = 0
@@ -161,6 +179,12 @@ class BaseInstance3DBoxes:
     @property
     def nearest_bev(self) -> Tensor:
         """Tensor: A tensor of 2D BEV box of each box without rotation."""
+        """
+        bev返回的时(x,y,l,w,yaw), 而nearest_bev则要返回一个AABB
+        若 |yaw| < pi/4, 则使其头朝前, 返回 (x,y,l,w) 对应的 (x-l/2,y-w/2,x+l/2,y+w/2)
+        若 |yaw| > pi/4, 则使其躺下, 返回 (x,y,w,l) 对应的 (x-w/2,y-l/2,x+w/2,y+l/2)
+        这个方法可用于 gt match pred 时的加速匹配
+        """
         # Obtain BEV boxes with rotation in XYWHR format
         bev_rotated_boxes = self.bev
         # convert the rotation to a valid range

@@ -36,6 +36,34 @@ class AnchorTrainMixin(object):
                 bbox targets, bbox weights, direction targets,
                 direction weights, number of positive anchors and
                 number of negative anchors.
+
+        ------------------------------------------------------------
+        num_level_anchors 是每个feature map的anchor数量, 如 [3.2e5, 8e4, 2e4]
+        anchor_list batch中每个样本的总anchor向量, 如 [ [4.2e5, 9]的tensor, ... ]
+        
+        multi_apply会调用self.anchor_target_3d_single分别处理每个样本
+        all_labels, all_label_weights, all_bbox_targets, all_bbox_weights, all_dir_targets, all_dir_weights, pos_inds_list, neg_inds_list 是 multi_apply 的返回值, 分别对应 labels, label_weights, bbox_targets, bbox_weights, dir_targets, dir_weights, pos_inds, neg_inds
+        all_labels 长度为B的list, 每个元素是长度为N anchor总数, 0-base的label_idx, 若为num_classes, 则是背景
+        all_label_weights 长度为B的list, 每个元素是长度为N anchor总数, 忽略的anchor权重为0, 正样本权重为1, 负样本权重为1 (当然用户可以自己设置)
+        all_bbox_targets 长度为B的list, 每个元素是长度为N anchor总数, 回归目标, (dx, dy, dz, dx_size, dy_size, dz_size, dr, dv*) 但只有正样本有值
+        all_bbox_weights 长度为B的list, 每个元素是长度为N anchor总数, 回归目标的权重, 只有正样本是1
+        all_dir_targets 长度为B的list, 每个元素是长度为N anchor总数, 方向分类目标, 只有正样本有值
+        all_dir_weights 长度为B的list, 每个元素是长度为N anchor总数, 方向分类目标的权重, 只有正样本是1
+        pos_inds_list长度为B的list, 每个元素是长度为正样本anchor数量, 正样本anchor的索引
+        neg_inds_list长度为B的list, 每个元素是长度为负样本anchor数量, 负样本anchor的索引
+
+        images_to_levels: 用于长度为B的list(每个元素是长度为N的tensor), 
+            返回长度为F的list(F为是feature map的数量), 每个元素为 (B,X_i)的anchor向量, X_i是第i个feature map上的anchor数量
+
+        最后输出
+        labels_list 长度为F的list, 每个元素是 (B,X_i)的label向量, X_i是第i个feature map上的anchor数量
+        label_weights_list 长度为F的list, 每个元素是 (B,X_i)的label_weight向量, X_i是第i个feature map上的anchor数量
+        bbox_targets_list 长度为F的list, 每个元素是 (B,X_i)的bbox_target向量, X_i是第i个feature map上的anchor数量
+        bbox_weights_list 长度为F的list, 每个元素是 (B,X_i)的bbox_weight向量, X_i是第i个feature map上的anchor数量
+        dir_targets_list 长度为F的list, 每个元素是 (B,X_i)的dir_target向量, X_i是第i个feature map上的anchor数量
+        dir_weights_list 长度为F的list, 每个元素是 (B,X_i)的dir_weight向量, X_i是第i个feature map上的anchor数量
+        num_total_pos batch中正样本anchor数量
+        num_total_neg batch中负样本anchor数量
         """
         num_inputs = len(batch_input_metas)
         assert len(anchor_list) == num_inputs
@@ -258,6 +286,25 @@ class AnchorTrainMixin(object):
 
         Returns:
             tuple[torch.Tensor]: Anchor targets.
+
+        对单样本数据做assign
+        assign_result = bbox_assigner.assign(...) 匹配gt和anchor, 记录了每个anchor匹配到的gt的索引
+        sampling_result = self.bbox_sampler.sample(...) 通常是减少/不变 正样本数量, 大幅减少 负样本数量.
+            在SamplingResult的数据结构中, sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes 要等长, 分别是正样本anchor和其对应gt的boxes
+            注意, 是有可能出现多个anchor匹配到同一个gt的
+        pos_bbox_targets = self.bbox_coder.encode(...) 为正样本的anchor编码到gt的回归目标, (dx, dy, dz, dx_size, dy_size, dz_size, dr, dv*)
+        pos_dir_targets = get_direction_target(...) 为正样本编码方向分类目标(朝前/朝后)
+        
+        最后返回
+        labels, label_weights, bbox_targets, bbox_weights, dir_targets, dir_weights, pos_inds, neg_inds
+        labels长度为N anchor总数, 0-base的label_idx, 若为num_classes, 则是背景
+        label_weights长度为N anchor总数, 忽略的anchor权重为0, 正样本权重为1, 负样本权重为1 (当然用户可以自己设置)
+        bbox_targets长度为N anchor总数, 回归目标, (dx, dy, dz, dx_size, dy_size, dz_size, dr, dv*) 但只有正样本有值
+        bbox_weights长度为N anchor总数, 回归目标的权重, 只有正样本是1
+        dir_targets长度为N anchor总数, 方向分类目标, 只有正样本有值
+        dir_weights长度为N anchor总数, 方向分类目标的权重, 只有正样本是1
+        pos_inds长度为正样本anchor数量, 正样本anchor的索引
+        neg_inds长度为负样本anchor数量, 负样本anchor的索引
         """
         anchors = anchors.reshape(-1, anchors.size(-1))
         num_valid_anchors = anchors.shape[0]
@@ -289,6 +336,7 @@ class AnchorTrainMixin(object):
                 as_tuple=False).squeeze(-1).unique()
 
         if gt_instance_3d.labels_3d is not None:
+            # 原来labels是长度为N的0向量, 这里变成了长度为N的num_classes向量, 拥有表示背景, label是0-based的类别索引
             labels += num_classes
         if len(pos_inds) > 0:
             pos_bbox_targets = self.bbox_coder.encode(
@@ -337,6 +385,23 @@ def get_direction_target(anchors,
 
     Returns:
         torch.Tensor: Encoded direction targets.
+
+    rot_gt  rot_gt-dir_offset=rot_gt+pi/2   offset_rot  bin
+    0         pi/2                            pi/2       0
+    pi/2      pi                              pi         1
+    pi        3pi/2                           3pi/2      1
+    -pi/2     0                               0          0
+    -pi        pi/2                           3pi/2      1
+
+            朝前 (0)
+            ↑
+        bin0  |  bin0
+            |
+    朝左 ←----+----→ 朝右      ← 分界线在这里 (±π/2)
+            |
+        bin1  |  bin1
+            ↓
+            朝后 (π)
     """
     rot_gt = reg_targets[..., 6] + anchors[..., 6]
     offset_rot = limit_period(rot_gt - dir_offset, dir_limit_offset, 2 * np.pi)

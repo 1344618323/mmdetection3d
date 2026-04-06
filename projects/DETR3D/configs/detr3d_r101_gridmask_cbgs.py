@@ -58,7 +58,8 @@ data_prefix = dict(
 
 train_dataloader = dict(
     _delete_=True,
-    batch_size=1,
+    # a6000: 2; 3090: 1; 2080 can't run
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     drop_last=False,

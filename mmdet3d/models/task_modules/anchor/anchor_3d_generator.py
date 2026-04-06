@@ -107,6 +107,11 @@ class Anchor3DRangeGenerator(object):
                 N = width * height * num_base_anchors, width and height
                 are the sizes of the corresponding feature level,
                 num_base_anchors is the number of anchors for that level.
+        
+        譬如说输入: featmap_sizes = [(200,200), (100,100), (50,50)]
+        anchor_sizes 有4种, rotation 有2种
+        最后返回一个列表 [200*200*4*2=3.2e5个anchor, 100*100*4*2=8e4个anchor,  50*50*4*2=2e4个anchor],
+        每个anchor至少7个维度: x, y, z, size_x, size_y, size_z, rotation (注意xyz是物理坐标,不是索引)
         """
         assert self.num_levels == len(featmap_sizes)
         multi_level_anchors = []
@@ -140,6 +145,11 @@ class Anchor3DRangeGenerator(object):
         # torch: 0.6975 s for 1000 times
         # numpy: 4.3345 s for 1000 times
         # which is ~5 times faster than the numpy implementation
+
+        """
+        用于生成单个feature map的anchor向量
+        最后会返回一个 [D,H,W,nums_sizes,R,x] 的tensor, 即每个元素的最后一个维度是x, 前7维度, 分别是 x, y, z, size_x, size_y, size_z, rotation
+        """
         if not self.size_per_range:
             return self.anchors_single_range(
                 featmap_size,
@@ -292,6 +302,27 @@ class AlignedAnchor3DRangeGenerator(Anchor3DRangeGenerator):
         Returns:
             torch.Tensor: Anchors with shape
                 [*feature_size, num_sizes, num_rots, 7].
+
+        ------------------------------------------------------------
+        用于对给定的featuremap生成所有anchor的向量
+
+        rets=torch.meshgrid(...) 返回的是个tuple, 里面有4个tensor, 分别是 x网格, y网格, z网格, rotations网格
+        每个网格都是 [feature_size[2], feature_size[1], feature_size[0], len(rotations)] 的tensor. 简写成 rets[i].shape = [W,H,D,R]。
+        对于x网格而言，tensor记录的值是某个cell的x坐标
+
+        对于每个rets[i], 其尺寸 [W,H,D,1,R] 经过 (1,1,1,nums_sizes,1) 变成 [W,H,D,nums_sizes,R], nums_sizes是anchor的尺寸数量.
+        最后变成 [W,H,D,nums_sizes,R,1] 的tensor, 即 rets[i].shape = [W,H,D,nums_sizes,R,1]
+
+        sizes 原是 nums_sizes * 3 的tensor（每个anchor的lwh）, 会转成 [1,1,1,nums_sizes,1,3] 的tensor, 
+        经过 tile_size_shape (尺寸为[W,H,D,1,R]) 变成 [W,H,D,nums_sizes,R,3] 的sizes
+
+        最后rets 变成 [xgrid, ygrid, zgrid, sizes, rotations] 的list,并cat成 [W,H,D,nums_sizes,R,7] 的tensor,
+        并permute成 [D,H,W,nums_sizes,R,7]
+        要强调下每个anchor向量此时有7个维度, 分别是 x, y, z,size_x, size_y, size_z, rotation (注意xyz是物理坐标,不是索引,而且也不会随permute改变)
+        如果有custom_values, 比如加入vx,vy, 就cat成 [D,H,W,nums_sizes,R,9] 的tensor, 即每个元素的最后一个维度是9
+        
+        最后输出形状是 [D,H,W,nums_sizes,R,>=7] 的tensor, 物理意思是一个 D*H*W 的featuremap中, 每个cell有nums_sizes中尺寸、R个rotation的anchor, 
+        每个anchor 有 >=7 的属性值，各属性是 x, y, z, size_x, size_y, size_z, rotation, ...
         """
         if len(feature_size) == 2:
             feature_size = [1, feature_size[0], feature_size[1]]

@@ -18,6 +18,10 @@ def get_paddings_indicator(actual_num: Tensor,
 
     Returns:
         torch.Tensor: Mask indicates which points are valid inside a voxel.
+
+    actual_num: [N] or [B, N] 各体素实际点数
+    max_num: max_num 每个体素最大的点数
+    返回 [N, max_num] or [B, N, max_num] 若对应值是true, 则该点有效; 若为false, 则该位置无点
     """
     actual_num = torch.unsqueeze(actual_num, axis + 1)
     # tiled_actual_num: [N, M, 1]
@@ -47,6 +51,15 @@ class VFELayer(nn.Module):
             each voxel and only return voxel features.
         cat_max (bool): Whether concatenate the aggregated features
             and pointwise features.
+        
+    见论文 https://arxiv.org/abs/1711.06396 VoxelNet: End-to-End Learning for Point Cloud Based 3D Object Detection
+    Figure 3. Voxel feature encoding layer
+    输入[N, M, in_channels] N是体素数量, M是体素内最大点数, in_channels是点特征维度. 即图中的Point-wise Input
+    经过linear+norm+relu 得到 [N, M, out_channels] 即图中的Point-wise Feature
+    如果max_out=False, 就直接返回Point-wise Feature
+    如果max_out=True, 则进行max pooling, 得到 [N, 1, out_channels] 即图中的Locally Aggregated Feature
+    如果cat_max=False, 则返回 [N, out_channels] 的 Locally Aggregated Feature
+    如果cat_max=True, 则将Locally Aggregated Feature与Point-wise Feature拼接, 得到 [N, M, 2*out_channels] 即图中的Point-wise Concatenated Feature
     """
 
     def __init__(self,

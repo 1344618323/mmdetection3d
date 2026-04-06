@@ -74,6 +74,13 @@ def array_converter(to_torch: bool = True,
         >>>     return torch.floor(a) if flag else torch.ceil(a)
         >>>
         >>> floor_or_ceil(a, flag=False)
+
+
+    ------------------------------------------------------------
+    输入 torch.tensor, np.ndarray, list/tuple, int/float
+    计算时, 若to_torch=True, 则转换成torch.tensor; 若to_torch=False, 则转换成np.ndarray
+    返回时, 若recover=True, 则转换成输入类型; 若recover=False, 则转换成计算时使用的类型
+    对于 list/tuple, int/float 在recover=True时的表现, 用到时再确认
     """
 
     def array_converter_wrapper(func):

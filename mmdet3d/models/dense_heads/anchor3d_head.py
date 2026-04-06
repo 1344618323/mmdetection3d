@@ -45,6 +45,66 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
         train_cfg (dict): Train configs.
         test_cfg (dict): Test configs.
         init_cfg (dict or list[dict], optional): Initialization config dict.
+
+    ------------------------------------------------------------
+    以pointpillars为例
+    self.prior_generator 是 mmdet3d.models.task_modules.anchor.anchor_3d_generator.AlignedAnchor3DRangeGenerator: 用于给featuremap生成所有anchor的向量
+    self.bbox_assigner 是 mmdet3d.models.task_modules.assigners.max_3d_iou_assigner.Max3DIoUAssigner
+    self.bbox_sampler 是 mmdet3d.models.task_modules.samplers.pseudosample.PseudoSampler 
+    self.bbox_coder 是 mmdet3d.models.task_modules.coders.delta_xyzwhlr_bbox_coder.DeltaXYZWLHRBBoxCoder
+    
+    self.loss_cls 是 mmdet.FocalLoss 源码/opt/conda/lib/python3.8/site-packages/mmdet/models/losses/focal_loss.py
+        Focal Loss 核心公式 FL(p_t)=-\alpha_t(1-p_t)^{\gamma}log(p_t)
+        p_t = y*p 其中y是gt的label, p是模型预测的概率, 即 pt = p if y=1 else 1-p
+        \alpha_t, \gamma 是超参数, 通常 \alpha_t=0.25, \gamma=2.0
+        
+        mmdet.FocalLoss 源码中 使用的是 sigmoid_focal_loss, 即 每个类别独立做二分类, C个类别分别产生C个loss.
+            其中 p = 1/(1+exp(-x)). 对于N个anchor, sigmoid激活后有 (N,C)的tensor, 经过平均得到 标量loss
+        与之对应的是 softmax_focal_loss, 即 所有类别一起做多分类, 所有类别产生一个loss
+            其中 p = exp(x_i)/sum(exp(x_k)), k=1,2,...,C, i是label标签
+
+        这是pointpillars 中用 PseudoSampler 不做正负样本采样的原因: Focal Loss 的 gamma 机制自动解决了正负不平衡，不需要显式地控制正负比例。
+    
+    self.loss_bbox 是 mmdet.SmoothL1Loss 源码/opt/conda/lib/python3.8/site-packages/mmdet/models/losses/smooth_l1_loss.py
+        SmoothL1Loss 核心公式 
+            L = 0.5*(x-y)^2/\beta, if |x-y| < \beta 当误差小时, 用平方项(L2), 梯度平滑趋于0, 避免在接近目标时振荡
+            L = |x-y| - 0.5/\beta, otherwise 当误差大时, 用绝对值项(L1), 梯度为+-1, 避免大误差产生过大梯度导致训练不稳
+            \beta 是超参数, 通常 \beta=1.0
+
+    self.loss_dir 是 mmdet.CrossEntropyLoss 源码/opt/conda/lib/python3.8/site-packages/mmdet/models/losses/cross_entropy_loss.py
+        核心公式 -log(Softmax(x)_{label_class})
+
+    最后对于pointpillars而言: 
+    loss_cls: 忽略样本权重为0, 正负样本有权重, 负样本算作背景类, 最后所有anchor的loss/正样本数量。
+        为何不是除（正样本+负样本）？因为绝大多数负样本是简单负样本, loss近乎于0, 除(正样本+负样本)会把正样本的loss稀释掉
+    loss_box= 仅正样本的loss/正样本数量
+    loss_dir= 仅正样本的loss/正样本数量
+
+    ------------------------------------------------------------
+    调用逻辑
+    Base3DDenseHead.loss(x, batch_data_samples, ...)
+        Anchor3DHead.forward(x): multi_apply(self.forward_single, x) 
+            即每个level的featuremap 分别过 Anchor3DHead.forward_single (分别是3个1*1的2d卷积), 得到 
+                cls_score [B,num_anchors * num_classes,H,W], 其中num_anchors=num_rot * num_size, num_classes是类别数
+                bbox_pred [B,num_anchors * box_code_size,H,W]
+                dir_cls_pred [B,num_anchors * 2,H,W]
+            最后返回 featuremap1的结果，featuremap2的结果，featuremap3的结果..., 每个结果都是 (cls_score, bbox_pred, dir_cls_pred) 的tuple
+        Anchor3DHead.loss_by_feat(loss_input, batch_gt...): 
+            anchor_list = self.get_anchors(...) 生成anchor. 返回 长度为B的列表, 每个元素也是个列表, 子列表长度为feature map的level数量, 孙子列表的每个元素是 [D,H,W,nums_sizes,R,>=7] 的tensor
+            cls_reg_targets = self.anchor_target_3d(...) 其实就是调用 AnchorTrainMixin.anchor_target_3d(...)，匹配anchor和gt：
+                1. 将属于同一样本的不同level的anchor叠在一起，因为gt与anchor匹配时，允许一个gt被多个anchor匹配到
+                2. 每个样本分别调用 multi_apply(AnchorTrainMixin.anchor_target_3d_single, ...)
+                    即每个样本调用 AnchorTrainMixin.anchor_target_single_assigner(...)
+                        1. bbox_assigner.assign(pred, gt, ...) 
+                            这里有一点要注意：无论什么样本，无论迭代多少次，pred（即anchors）的值都是一样的.
+                            通过aabb 2d iou 来划分anchor中的正样本，负样本，忽略样本
+                        2. bbox_sampler.sample(...) 在pointpillars中没有用
+                        3. bbox_coder.encode(...) 为正样本的anchor编码到gt的回归目标：dx,dy,dz都是会尺寸归一化，dl,dw,dh都会log归一化，dr是直接的差距（但后续会通过sin考虑周期性）
+                        4. get_direction_target(...) 为正样本编码方向分类目标(朝前/朝后)
+                        5. 正样本的anchor 设置 0-based labels, 负样本设置为背景类；正、负样本有权重，忽略样本0权重
+                3. 划分成F（featuremap level）,并返回
+            multi_apply(self._loss_by_feat_single, ...)
+                即每个level的featuremap 分别过 self._loss_by_feat_single, 得到 loss_cls, loss_bbox, loss_dir
     """
 
     def __init__(self,
@@ -98,6 +158,7 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
         # build anchor generator
         self.prior_generator = TASK_UTILS.build(anchor_generator)
         # In 3D detection, the anchor stride is connected with anchor size
+        # 其大小为num_base_anchors = num_rot * num_size 预设的rot数量*预设的size数量
         self.num_anchors = self.prior_generator.num_base_anchors
         # build box coder
         self.bbox_coder = TASK_UTILS.build(bbox_coder)
@@ -194,6 +255,11 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
                 - dir_cls_preds (list[Tensor|None]): Direction classification
                     predictions for all scale levels, each is a 4D-tensor,
                     the channels number is num_base_priors * 2.
+        
+        可以看下 multi_apply 的实现, 很有意思
+        x是 i0, i1, i2, 有 
+        (o00, o01, o02) = self.forward_single(i0), (o10, o11, o12) = self.forward_single(i1), (o20, o21, o22) = self.forward_single(i2)
+        return ([(o00, o10, o20), (o01, o11, o21), (o02, o12, o22)])
         """
         return multi_apply(self.forward_single, x)
 
@@ -232,6 +298,8 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
         Returns:
             list[list[torch.Tensor]]: Anchors of each image, valid flags
                 of each image.
+
+        返回长度为B的列表, 列表每个元素也是个列表, 子列表长度为feature map的level数量, 子列表的每个元素是 [D,H,W,nums_sizes,R,>=7] 的tensor
         """
         num_imgs = len(input_metas)
         # since feature map sizes of all images are the same, we only compute
@@ -264,6 +332,38 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
         Returns:
             tuple[torch.Tensor]: Losses of class, bbox
                 and direction, respectively.
+
+        输入:
+        cls_score (B,num_anchors * num_classes,H,W) num_anchors=num_rot * num_size 一个网格内的anchor数量
+        bbox_pred (B,num_anchors * box_code_size,H,W) box_code_size=7+dv*
+        dir_cls_pred (B,num_anchors * R,H,W)
+        labels (B,N) N=num_anchors*H*W
+        label_weights (B,N)
+        bbox_targets (B,N,>=7)
+        bbox_weights (B,N,>=7)
+        dir_targets (B,N)
+        dir_weights (B,N)
+        num_total_samples 是该batch所有featuremap下的正样本anchor数量(对于self.sampling=False的情况, 
+            对于self.sampling=True的情况, 是该batch所有featuremap下的正样本anchor数量和负样本anchor数量之和,
+            对于pointpillars, self.sampling=False)
+
+        在进入self.loss_cls前
+        labels (B*N)
+        label_weights (B*N,)
+        cls_score (B*N,num_classes)
+        最后 loss_cls 是标量
+
+        在进入self.loss_bbox前
+        bbox_pred (B*N,box_code_size)
+        bbox_targets (B*N,box_code_size)
+        bbox_weights (B*N,box_code_size)
+        最后 loss_bbox 是标量
+
+        在进入self.loss_dir前
+        dir_cls_pred (B*N,2)
+        dir_targets (B*N)
+        dir_weights (B*N)
+        最后 loss_dir 是标量
         """
         # classification loss
         if num_total_samples is None:
@@ -342,6 +442,12 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
         Returns:
             tuple[torch.Tensor]: ``boxes1`` and ``boxes2`` whose 7th
                 dimensions are changed.
+        
+        predbbox[6]' = sin(predbbox[6])*cos(gtbbox[6])
+        gtbbox[6]' = cos(predbbox[6])*sin(gtbbox[6])
+        注意 predbbox[6] 是模型预测值, 而 gtbbox[6] = rg-ra, rg是gt的yaw角度, ra是anchor的yaw角度
+        如此一来, 在使用smoothl1时, 就有
+        sin(predbbox[6])*cos(gtbbox[6])-cos(predbbox[6])*sin(gtbbox[6])=sin(predbbox[6]-gtbbox[6])
         """
         rad_pred_encoding = torch.sin(boxes1[..., 6:7]) * torch.cos(
             boxes2[..., 6:7])
@@ -386,6 +492,11 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
                 - loss_bbox (list[torch.Tensor]): Box regression losses.
                 - loss_dir (list[torch.Tensor]): Direction classification
                     losses.
+
+        最后返回字典:
+        losses_cls 对于val: 长度为F的列表, 每个元素是标量, F是feature map的level数量
+        losses_bbox 对于val: 长度为F的列表, 每个元素是标量
+        losses_dir 对于val: 长度为F的列表, 每个元素是标量
         """
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         assert len(featmap_sizes) == self.prior_generator.num_levels

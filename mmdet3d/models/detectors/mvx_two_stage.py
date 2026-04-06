@@ -203,6 +203,45 @@ class MVXTwoStageDetector(Base3DDetector):
         Returns:
             Sequence[tensor]: points features of multiple inputs
             from backbone or neck.
+
+        这里以pointpillars为例，论文中其结构为 encoder->scatter->backbone->head，
+        在这个函数中会执行其中的encoder->scatter->backbone
+        1. pts_voxel_encoder的一种配置是 HardVFE, 源码 mmdet3d/models/voxel_encoders/voxel_encoder.py
+        输入的 voxel_dict['voxels'] 是 [M, N, Cin] M个体素(该batch一共M个体素), 体素内最大点数N, 点特征维度Cin
+        输出的 voxel_features 是 [M, C] M个体素(体素数量没变), 每个体素有一个C维度的特征
+        2. pts_middle_encoder是 PointPillarsScatter mmdet3d/models/middle_encoders/pillar_scatter.py: 无学习参数
+        输出 [B, C, ny, nx] 注意nx, ny和rangex/voxelx, rangey/voxely要保持一致
+        3. pts_backbone: SECOND, 源码 mmdet3d/models/backbones/second.py
+            输入尺寸 [B, C, ny, nx] (如[1, 64, 400, 400])
+            输出尺寸
+            [B, C, ny/2, nx/2]
+            [B, 2C, ny/4, nx/4]
+            [B, 4C, ny/8, nx/8]
+        4. pts_neck: mmdet.FPN 
+            源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/necks/fpn.py
+            论文 Feature Pyramid Networks for Object Detection https://arxiv.org/pdf/1612.03144 Figure 3
+            输出尺寸为
+            [B, 4C, ny/2, nx/2]
+            [B, 4C, ny/4, nx/4]
+            [B, 4C, ny/8, nx/8]
+
+            再啰嗦两句FPN的实现细节:
+            [B, 4C, ny/8, nx/8] -> 1x1 conv(4C->4C) -> lateral0
+                                                        |
+                                                    lateral0 作为 FPN 最顶层
+                                                        | 2x upsample
+            [B, 2C, ny/4, nx/4] -> 1x1 conv(2C->4C) -> lateral1 + upsample(lateral0) -> merge1
+                                                                                        | 2x upsample
+            [B, C,  ny/2, nx/2] -> 1x1 conv(C ->4C) -> lateral2 + upsample(merge1)   -> merge2
+
+            其中upsample使用 F.interpolate(laterals[i], size=prev_shape, mode='nearest')实现的，即复制最近值
+
+            然后每层各过一个 3x3 conv:
+            lateral0 -> 3x3 conv -> FPN_out0 [B, 4C, ny/8, nx/8]
+            merge1   -> 3x3 conv -> FPN_out1 [B, 4C, ny/4, nx/4]
+            merge2   -> 3x3 conv -> FPN_out2 [B, 4C, ny/2, nx/2]
+
+        小结: 论文中的backbone在mmdet3d的实现中拆成了pts_backbone和pts_neck两个部分
         """
         if not self.with_pts_bbox:
             return None
@@ -264,6 +303,7 @@ class MVXTwoStageDetector(Base3DDetector):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
 
+        MVXTwoStageDetector分别提取图像和点云的特征, 然后分别计算图像和点云的损失
         """
 
         batch_input_metas = [item.metainfo for item in batch_data_samples]
@@ -384,6 +424,9 @@ class MVXTwoStageDetector(Base3DDetector):
                 (num_instances, ).
             - bbox_3d (:obj:`BaseInstance3DBoxes`): Prediction of bboxes,
                 contains a tensor with shape (num_instances, 7).
+        
+        -----------------------
+        预测结果写入detsamples
         """
         batch_input_metas = [item.metainfo for item in batch_data_samples]
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict,

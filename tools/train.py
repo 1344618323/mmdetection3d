@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
+        # 相当与进程内，作 export LOCAL_RANK=0 操作
         os.environ['LOCAL_RANK'] = str(args.local_rank)
     return args
 
@@ -127,6 +128,22 @@ def main():
     elif args.resume is not None:
         cfg.resume = True
         cfg.load_from = args.resume
+
+    """
+    截至到这一步，cfg就不会再修改了，cfg._cfg_dict是最终的配置字典，会写到 work_dir 中
+
+    我对cfg = Config.fromfile(args.config)很感兴趣，使用 python文件当配置+递归合并 的方式，构建了一个Config对象
+
+    如果我在config.py只写入
+
+    import math
+    hello_world = math.sqrt(2)
+    print(hello_world)
+
+    那么执行完cfg = Config.fromfile('config.py')后，结果为
+    cfg._cfg_dict
+    {'hello_world': 1.4142135623730951}
+    """
 
     # build the runner from config
     if 'runner_type' not in cfg:

@@ -1,0 +1,60 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: train.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tools/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "python": "/opt/conda/bin/python", 
+            "args": [
+                "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "NCCL_P2P_DISABLE": "1",
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python Debugger: test.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tools/test.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "python": "/opt/conda/bin/python", 
+            "args": [
+                "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
+                "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/epoch_24.pth",
+                // "--cfg-options",
+                // "test_evaluator.jsonfile_prefix=/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/pretrained_model_eval_results",
+                // "model.test_cfg.score_thr=0.2"
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0, 1",
+                "NCCL_P2P_DISABLE": "1",
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python Debugger: lab.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tools/lab.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "python": "/opt/conda/bin/python",
+        }
+    ]
+}

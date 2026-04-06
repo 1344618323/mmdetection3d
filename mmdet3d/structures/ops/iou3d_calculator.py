@@ -16,6 +16,8 @@ class BboxOverlapsNearest3D(object):
 
     Args:
         coordinate (str): 'camera', 'lidar', or 'depth' coordinate system.
+
+    这个类单纯封装了下bbox_overlaps_nearest_3d, 用于计算 bevaabb1 和 bevaabb2 的2DIoU.
     """
 
     def __init__(self, coordinate='lidar'):
@@ -126,6 +128,45 @@ def bbox_overlaps_nearest_3d(bboxes1,
         torch.Tensor: If ``is_aligned`` is ``True``, return ious between
             bboxes1 and bboxes2 with shape (M, N). If ``is_aligned`` is
             ``False``, return shape is M.
+
+    ------------------------------------------------------------
+    使用bev aabb1 和 bev aabb2 计算IoU.
+    函数名中的nearest即将bevbbox转成aabb的使用的意思; 另外虽然函数名中有3d, 但实际上是2d的IoU计算.
+    返回尺寸 (M,N) M是bev aabb1的个数, N是bev aabb2的个数
+    ------------------------------------------------------------
+    bbox_overlaps 源码 /opt/conda/lib/python3.8/site-packages/mmdet/structures/bbox/bbox_overlaps.py
+    假定输入是 (M,4)的AABB1, (N,4)的AABB2
+    area1 是 (M,) 每个AABB1的面积, area2 是 (N,) 每个AABB2的面积
+    is_aligned = True, 则此时确保 M==N
+
+        bboxes1[i]          bboxes2[j]
+    ┌─────────┐
+    │    ┌────┼──────┐
+    │    │////│      │    ← 交集区域
+    └────┼────┘      │
+        └───────────┘
+
+    lt 交集的左上角
+    rb 交集的右下角
+    overlap (M,N) 每个AABB1和AABB2的交集面积
+    union = area1 + area2 - overlap
+
+    mode = 'iou', 则返回 (M,N) overlap/union
+    mode = 'iof', 则返回 (M,N) overlap/area1 -> (M,N)/(M,1) = (M,N)
+
+
+    ┌──────────────────────┐  ← 最小外接矩形
+    │  ┌─────┐             │
+    │  │ box1│  ┌─────┐    │
+    │  └─────┘  │ box2│    │
+    │           └─────┘    │
+    └──────────────────────┘
+
+    GIoU = IoU - (外接面积 - 并集面积) / 外接面积
+
+    当两个框完全不重叠时，IoU=0，但 GIoU 会是负值（最低 -1），能给出"离得远"的梯度信号，这是 GIoU 相比 IoU 的优势
+
+    mode = 'giou', 则返回 GIOU (M,N) 
     """
     assert bboxes1.size(-1) == bboxes2.size(-1) >= 7
 
