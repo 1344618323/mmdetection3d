@@ -52,7 +52,7 @@ class BaseInstance3DBoxes:
     bottom_height: (N, ) 每个cuboid的底部高度
     center: (N, 3) 每个cuboid的中心点
     bottom_center: (N, 3) 每个cuboid的底部中心点
-    gravity_center: (N, 3) 每个cuboid的重心点
+    gravity_center: (N, 3) 每个cuboid的中心点
     bev: (N, 5) 每个cuboid的bevbox(x,y,w,h,yaw)
     """
 

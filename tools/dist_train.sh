@@ -21,13 +21,16 @@ python -m torch.distributed.launch \
     --launcher pytorch ${@:3}
 
 : <<'COMMENT'
+docker image: docker.pluscn.cn:5050/plusai/mmdetection3d:mmlab_cxn_dev
+
 4卡训练pointpillars
-./tools/dist_train.sh configs/pointpillars/configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py 4 \
+./tools/dist_train.sh configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py 4 \
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d \
 
 测试pointpillars
 ./tools/dist_test.sh /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py \
-    /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/epoch_24.pth 4
+    /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/epoch_24.pth 1 \
+    --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug
 
 测试pointpillars
 ./tools/dist_test.sh /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py \
@@ -37,6 +40,11 @@ python -m torch.distributed.launch \
 训练centerpoint
 ./tools/dist_train.sh configs/centerpoint/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d.py 8 \
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d
+
+测试centerpoint
+./tools/dist_test.sh /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d.py \
+    /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d/epoch_20.pth 1 \
+    --cfg-options test_evaluator.jsonfile_prefix=/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pretrained_model_eval_results
 
 训练DETR3D
 当前image的conda环境不兼容detr3d, 需执行
@@ -112,6 +120,7 @@ class DetDataPreprocessor(ImgDataPreprocessor):
             rgb_to_bgr=rgb_to_bgr,
             non_blocking=non_blocking) # 新增行
 
+修改后的对应image: docker.pluscn.cn:5050/plusai/mmdetection3d:mmlab_cxn_dev_detr3d
 
 bash tools/dist_train.sh projects/DETR3D/configs/detr3d_r101_gridmask_cbgs.py 6 --cfg-options load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/detr3d/fcos3d.pth \
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/detr3d_r101_gridmask_cbgs

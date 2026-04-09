@@ -14,8 +14,10 @@
             "cwd": "${workspaceFolder}",
             "python": "/opt/conda/bin/python", 
             "args": [
-                "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
-                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
+                // "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
+                // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
+                "configs/centerpoint/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d.py",
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d_debug",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0",
@@ -33,12 +35,15 @@
             "cwd": "${workspaceFolder}",
             "python": "/opt/conda/bin/python", 
             "args": [
-                "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
-                "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/epoch_24.pth",
+                // "configs/pointpillars/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d.py",
+                // "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/epoch_24.pth",
+                // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
                 // "--cfg-options",
                 // "test_evaluator.jsonfile_prefix=/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d/pretrained_model_eval_results",
                 // "model.test_cfg.score_thr=0.2"
-                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/pointpillars_hv_fpn_sbn-all_8xb4-2x_nus-3d_debug",
+                "configs/centerpoint/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d.py",
+                "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d/epoch_20.pth",
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/centerpoint_voxel0075_second_secfpn_head-dcn-circlenms_8xb4-cyclic-20e_nus-3d_debug",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0, 1",

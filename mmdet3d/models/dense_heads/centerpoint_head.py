@@ -33,6 +33,12 @@ class SeparateHead(BaseModule):
         norm_cfg (dict, optional): Config of norm layer.
             Default: dict(type='BN2d').
         bias (str, optional): Type of bias. Default: 'auto'.
+
+    ------------------------------------------------------------
+    init_bias: -2.19 这个值不是随便选的
+    sigmoid(x) = 1 / (1 + exp(-x)) = sigmoid(b)
+    b = log(p/(1-p)) = log(0.1/0.9) = -2.19
+    即模型初始化且特征无任何信息时,预测为正类的概率为先验值设置成0.1
     """
 
     def __init__(self,
@@ -229,6 +235,10 @@ class DCNSeparateHead(BaseModule):
                     shape of [B, 2, H, W].
                 -heatmap (torch.Tensor): Heatmap with the shape of
                     [B, N, H, W].
+
+        ------------------------------------------------------------
+        注意feature_adapt_cls/feature_adapt_reg,而没有使用共享参数
+        是为了把分类和回归任务解耦
         """
         center_feat = self.feature_adapt_cls(x)
         reg_feat = self.feature_adapt_reg(x)
@@ -346,6 +356,15 @@ class CenterHead(BaseModule):
 
         Returns:
             list[dict]: Output results for tasks.
+
+        输入[B, 512, 180, 180], 经过 self.shared_conv 得到 [B, 64, 180, 180]
+        输出一个列表, 长度为 大类 数量: 每个元素是个一个字典, key有 reg, height, dim, rot, vel, heatmap
+        heatmap尺寸 [B, 小类数量, 180, 180]
+        reg尺寸 [B, 2, 180, 180]
+        height尺寸 [B, 1, 180, 180]
+        dim尺寸 [B, 3, 180, 180]
+        rot尺寸 [B, 2, 180, 180]
+        vel尺寸 [B, 2, 180, 180]
         """
         ret_dicts = []
 
@@ -426,6 +445,14 @@ class CenterHead(BaseModule):
                     position of the valid boxes.
                 - list[torch.Tensor]: Masks indicating which
                     boxes are valid.
+        
+        ------------------------------------------------------------
+        输入 batch_gt_instances_3d: 批次gt
+        输出 heatmaps, anno_boxes, inds, masks 都是长度为大类数量的list
+            heatmaps 每个元素是 [B, 子类数量, 180, 180]
+            anno_boxes 每个元素是 [B, max_objs, 10], max_objs一般是500
+            inds 每个元素是 [B, max_objs], 表示gt中心坐标在heatmap中的一维索引 ind=y*W+x
+            masks 每个元素是 [B, max_objs], 1表示有效, 0表示无效
         """
         heatmaps, anno_boxes, inds, masks = multi_apply(
             self.get_targets_single, batch_gt_instances_3d)
@@ -462,6 +489,22 @@ class CenterHead(BaseModule):
                     of the valid boxes.
                 - list[torch.Tensor]: Masks indicating which boxes
                     are valid.
+
+        ------------------------------------------------------------
+        输入 gt_instances_3d: 单样本gt
+
+        中间变量
+        task_masks 长度为大类数量的列表, 每个元素是也是列表, 子列表长度为小类数量, 子列表每个元素是 样本中为该子类的 gt idx
+        task_boxes 长度为大类数量的列表, 每个元素是 [N, >=7] tensor
+        task_classes 长度为大类数量的列表, 每个元素是 [N,] tensor, 元素是子类索引(1-based)
+
+        输出 heatmaps, anno_boxes, inds, masks 都是长度为大类数量的list
+            heatmaps 每个元素是 [子类数量, 180, 180]
+                在每个类别热图上，以 GT 中心落入的离散网格为峰值点(整数坐标)，按目标尺寸自适应半径绘制高斯分布，
+                同时把 (gt中心-gt中心整数坐标) 和 3D box 其他参数(中心z, log(长度), log(宽度), log(高度), sinr, cosr , vx, vy)放入 anno_boxes 中。
+            anno_boxes 每个元素是 [max_objs, 10], max_objs一般是500
+            inds 每个元素是 [max_objs], 表示gt中心坐标在heatmap中的一维索引 ind=y*W+x
+            masks 每个元素是 [max_objs], 1表示有效, 0表示无效
         """
         gt_labels_3d = gt_instances_3d.labels_3d
         gt_bboxes_3d = gt_instances_3d.bboxes_3d
@@ -598,6 +641,9 @@ class CenterHead(BaseModule):
 
         Returns:
             dict: Losses of each branch.
+
+        ------------------------------------------------------------
+        outs 是一列表, 长度为 大类 数量, 每个元素也是列表, 长度为featuremap level数量, 每个子元素是个dict, key有 reg, height, dim, rot, vel, heatmap
         """
         outs = self(pts_feats)
         batch_gt_instance_3d = []
@@ -622,6 +668,15 @@ class CenterHead(BaseModule):
 
         Returns:
             dict[str,torch.Tensor]: Loss of heatmap and bbox of each task.
+
+        ------------------------------------------------------------
+        preds_dict[0] 指 单个大类预测中的第一个featuremap level(总共也就一个level)的预测结果
+        self.loss_cls 是 GaussianFocalLoss 源码/opt/conda/lib/python3.8/site-packages/mmdet/models/losses/gaussian_focal_loss.py
+                      正是CornerNet中的_neg_loss
+        self.loss_bbox 是 L1Loss 源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/losses/smooth_l1_loss.py
+        
+        返回值 loss_dict 是个长度为 2*大类数量的字典,   
+            key是 'task0.loss_heatmap', 'task0.loss_bbox', 'task1.loss_heatmap', 'task1.loss_bbox', ...
         """
 
         heatmaps, anno_boxes, inds, masks = self.get_targets(
@@ -717,6 +772,21 @@ class CenterHead(BaseModule):
                   (num_instances, 7) or (num_instances, 9), and
                   the last 2 dimensions of 9 is
                   velocity.
+
+        ------------------------------------------------------------
+        self.bbox_coder 是 CenterPointBBoxCoder 源码 mmdet3d/models/task_modules/coders/centerpoint_bbox_coders.py
+        
+        for task_id, preds_dict in ...:
+            # 指遍历每个大类的预测结果
+            self.bbox_coder.decode(...) # 解码该batch数据的回归结果, 返回长度为B的列表, 每个元素是 dict, 包含 bboxes, scores, labels
+            for i in range(batch_size): 遍历每个样本
+                nms(该样本在各子类的预测结果)
+                    为什么使用 circle_nms? （即中心距离<阈值则抑制）
+                    1. 这样比算iou更快（作为对比，pointpillars pred使用带旋转2dbbox nms）
+                    2. centerpoint本质是中心点+回归，候选冲突通常表现为“多个峰靠得太近”，用中心距离抑制很自然
+        rets 是长度为大类数量的列表, 每个元素是长度为B的列表, 子列表每个元素是 dict, key包含 bboxes, scores, labels
+
+        最后返回ret_list是个长度为B的列表, 每个元素是 InstanceData, 包含 bboxes_3d, scores_3d, labels_3d （各个大类的pred会直接concat到一起）
         """
         rets = []
         for task_id, preds_dict in enumerate(preds_dicts):

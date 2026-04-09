@@ -201,6 +201,16 @@ def circle_nms(dets: Tensor, thresh: float, post_max_size: int = 83) -> Tensor:
 
     Returns:
         Tensor: Indexes of the detections to be kept.
+
+    -----------------------
+    order = scores从大到小，在scores中索引
+    scores = [10, 8, 9]
+    order = [0, 2, 1]
+    for _i in range(ndets):
+        i = order[_i]  # 从大到小，获取score中索引 i
+        for _j in range(_i + 1, ndets):
+            j = order[_j] # 从大到小，获取score中索引 j
+            dist <= thresh 若二者中心距离<阈值，则抑制j
     """
     x1 = dets[:, 0]
     y1 = dets[:, 1]

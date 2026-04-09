@@ -25,6 +25,15 @@ class SECONDFPN(BaseModule):
             optional): Initialization config dict. Defaults to
             [dict(type='Kaiming', layer='ConvTranspose2d'),
              dict(type='Constant', layer='NaiveSyncBatchNorm2d', val=1.0)].
+    
+    对于deconv而言, 若kernel_size=2, stride=2, 其处理是:
+    将input撑大, 输入的每个相邻像素之间插入 stride - 1 个零
+    比如 input = A B
+                C D
+    撑大后为  A 0 B
+            0 0 0
+            C 0 D
+    再使用转置卷积, 最后得到4*4的输出
     """
 
     def __init__(self,

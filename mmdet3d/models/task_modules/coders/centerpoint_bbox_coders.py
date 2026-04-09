@@ -80,6 +80,11 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
                 torch.Tensor: Selected classes with the shape of [B, K].
                 torch.Tensor: Selected y coord with the shape of [B, K].
                 torch.Tensor: Selected x coord with the shape of [B, K].
+
+        ------------------------------------------------------------
+        为什么跑了两次topK?
+        试想如果输入K很小, 弱势类可能没有机会入选, 因此需要跑两次topK(一次子类间, 一次全类间), 给弱势类更多机会。
+        但如果输入K很大, 其实是可以跑一次topK的
         """
         batch, cat, height, width = scores.size()
 
@@ -148,6 +153,11 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
 
         Returns:
             list[dict]: Decoded boxes.
+
+        ------------------------------------------------------------
+        返回长度为B的列表, 每个元素是 dict, 包含 bboxes, scores, labels
+            bboxes: [N, >=7], N是预测数量,要求分数大于score_threshold
+            labels: [N,], 每个元素是子类索引(0-based)
         """
         batch, cat, _, _ = heat.size()
 

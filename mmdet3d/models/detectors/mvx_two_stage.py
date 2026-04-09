@@ -204,6 +204,7 @@ class MVXTwoStageDetector(Base3DDetector):
             Sequence[tensor]: points features of multiple inputs
             from backbone or neck.
 
+        -------------------------------------------------------------
         这里以pointpillars为例，论文中其结构为 encoder->scatter->backbone->head，
         在这个函数中会执行其中的encoder->scatter->backbone
         1. pts_voxel_encoder的一种配置是 HardVFE, 源码 mmdet3d/models/voxel_encoders/voxel_encoder.py
@@ -213,7 +214,7 @@ class MVXTwoStageDetector(Base3DDetector):
         输出 [B, C, ny, nx] 注意nx, ny和rangex/voxelx, rangey/voxely要保持一致
         3. pts_backbone: SECOND, 源码 mmdet3d/models/backbones/second.py
             输入尺寸 [B, C, ny, nx] (如[1, 64, 400, 400])
-            输出尺寸
+            输出尺寸(注意C,ny,nx的倍率都是在config中配置的,不一定是下面写的1,2,4,1/2,1/4,1/8)
             [B, C, ny/2, nx/2]
             [B, 2C, ny/4, nx/4]
             [B, 4C, ny/8, nx/8]
@@ -242,6 +243,22 @@ class MVXTwoStageDetector(Base3DDetector):
             merge2   -> 3x3 conv -> FPN_out2 [B, 4C, ny/2, nx/2]
 
         小结: 论文中的backbone在mmdet3d的实现中拆成了pts_backbone和pts_neck两个部分
+
+        -------------------------------------------------------------
+        看下centerpoint
+        1. pts_voxel_encoder配置为HardSimpleVFE, 源码 mmdet3d/models/voxel_encoders/voxel_encoder.py
+            即直接将体素内所有点的特征求平均, 得到体素级特征
+            输入的 voxel_dict['voxels'] 是 [M, N, C] M个体素(该batch一共M个体素), 体素内最大点数N, 点特征维度C（一般为5），输出为[M, C]
+        2. pts_middle_encoder配置为SparseEncoder, 源码 mmdet3d/models/middle_encoders/sparse_encoder.py 稀疏3D卷积
+            输入[M,C]: 以默认配置为例 sparse_shape=[41, 1440, 1440]，8倍下采样，z方向再多一次2倍下采样，
+            最后返回[B, C*D, H, W]的tensor
+        3. pts_backbone: SECOND, 源码 mmdet3d/models/backbones/second.py
+            输出一个tuple:
+            [B, out_c[0], ny/stride[0], nx/stride[0]]
+            [B, out_c[1], ny/stride[1], nx/stride[1]]
+        4. pts_neck: SECONDFPN, 源码 mmdet3d/models/necks/second_fpn.py
+            输出是一个长度为1的tuple, 元素尺寸为 [B, out_c[0]*2+out_c[1], ny/stride[0], nx/stride[0]]
+            在centerpoint的默认配置中, 是一 [B, 512, 180, 180]的tensor, 即只有一层相对原图8倍下采样的featuremap
         """
         if not self.with_pts_bbox:
             return None

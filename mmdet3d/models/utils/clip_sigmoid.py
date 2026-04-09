@@ -13,6 +13,8 @@ def clip_sigmoid(x: Tensor, eps: float = 1e-4) -> Tensor:
 
     Returns:
         Tensor: Feature map after sigmoid.
+
+    虽然sigmoid本身输出范围是(0,1), 但实际使用中会加上一个eps(默认值是1e-4)防止梯度爆炸
     """
     y = torch.clamp(x.sigmoid_(), min=eps, max=1 - eps)
     return y
