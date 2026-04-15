@@ -41,6 +41,8 @@ def parse_args():
         'in the work directory.')
     parser.add_argument(
         '--ceph', action='store_true', help='Use ceph as data storage backend')
+    
+    # 搜集的参数会覆盖cfg
     parser.add_argument(
         '--cfg-options',
         nargs='+',

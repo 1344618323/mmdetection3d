@@ -35,10 +35,16 @@ class SeparateHead(BaseModule):
         bias (str, optional): Type of bias. Default: 'auto'.
 
     ------------------------------------------------------------
-    init_bias: -2.19 这个值不是随便选的
-    sigmoid(x) = 1 / (1 + exp(-x)) = sigmoid(b)
+    bias_init: -2.19 这个值不是随便选的
+    sigmoid(y) = 1 / (1 + exp(-y)) = sigmoid(wx+b)=sigmoid(b)
     b = log(p/(1-p)) = log(0.1/0.9) = -2.19
-    即模型初始化且特征无任何信息时,预测为正类的概率为先验值设置成0.1
+    即模型初始化且特征无任何信息(即x=0)时,预测为正类的概率为先验值设置成0.1
+    
+    另一个常见的是 bias = log(p/(1-p)) = log(0.01/0.99) = -4.595
+
+    不同先验概率对应的 bias_init 值可以用
+    from mmengine.model import bias_init_with_prob
+    bias_init = bias_init_with_prob(0.01) = -4.595 来获取
     """
 
     def __init__(self,

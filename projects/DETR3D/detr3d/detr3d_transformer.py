@@ -44,6 +44,86 @@ class Detr3DTransformer(BaseModule):
             Default: 6 in NuScenes Det.
         two_stage_num_proposals (int): Number of proposals when set
             `as_two_stage` as True. Default: 300.
+
+    --------------------------------
+    1. self.reference_points 是 (256, 3) 的线性层
+    2. self.decoder 是 Detr3DTransformerDecoder 的 obj，其父类为 mmcv.cnn.bricks.transformer.TransformerLayerSequence
+        该class源码见 /opt/conda/lib/python3.8/site-packages/mmcv/cnn/bricks/transformer.py
+        Detr3DTransformerDecoder 只是重写了 TransformerLayerSequence 的forward方法，其他方法一样。
+        TransformerLayerSequence 中会按配置构造多层(如6层) mmdet.models.layers.transformer.DetrTransformerDecoderLayer
+            DetrTransformerDecoderLayer 源码见 /opt/conda/lib/python3.8/site-packages/mmdet/models/layers/transformer.py
+            DetrTransformerDecoderLayer 的 父类是 mmcv.cnn.bricks.transformer.BaseTransformerLayer，这个类用于实现 一个transformer layer
+                BaseTransformerLayer 源码 /opt/conda/lib/python3.8/site-packages/mmcv/cnn/bricks/transformer.py
+                DetrTransformerDecoderLayer 构造时会先调用 BaseTransformerLayer 的构造函数, 
+                所以先看下 BaseTransformerLayer 的构造函数做了啥:
+                    1. 设置其内子块的run顺序, 如 ('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+                    2. 构造 self_attn 对应 MultiheadAttention, 源码见 /opt/conda/lib/python3.8/site-packages//cnn/bricks/transformer.py
+                        这个类是 nn.MultiheadAttention的封装, 但要注意forward输出的是 x+multihead_attn(x)的结果
+                    3. 构造 cross_attn 对应 Detr3DCrossAtten
+                    4. 构建 norm 对应 LayerNorm, 源码见 /opt/conda/lib/python3.8/site-packages/mmcv/cnn/bricks/transformer.py
+                        即 torch.nn.modules.normalization.LayerNorm
+                    5. 构建 ffn 对应 FFN, 源码见 /opt/conda/lib/python3.8/site-packages/mmcv/cnn/bricks/transformer.py
+                        具体实现为：linear(256, 512) -> ReLU -> dropout -> linear(512, 256) -> dropout
+                        linear通道数，不一定是(256, 512)，看配置
+                        forward输出的是 x+ffn(x)的结果
+
+                    对于BaseTransformerLayer有必要再补充下，其中PE的使用方式与 attention is all you need 中不同：
+                    在 attention is all you need 中, PE是先加到input上得到新input， 再串联 N 个 transformer layer；
+                    而mmcv中的实现则在每一层 attention layer中反复注入query_pos, key_pos. 这是DETR的做法，见DETR论文table 3, 显示这样做能提点。
+
+                    另外其残差使用方式有两种 pre_norm or post_norm
+                    post_norm: x_{t+1} = LayerNorm(x_t + sublayer(x_t)) 原始 Transformer 采用, DETR3D 默认也是用这个
+                    pre_norm: x_{t+1} = x_t + sublayer(LayerNorm(x_t)) 现代大模型中的标配，据说性能更好
+
+                我们再看下BaseTransformerLayer.forward, 注意我们只看默认配置下的, 了解大意即可
+                BaseTransformerLayer.forward(query, key, value, query_pos, key_pos, attn_masks, query_key_padding_mask, key_padding_mask, **kwargs):
+                    1. query = self.attentions[0](query, query, query, None, query_pos, key_pos, ...)
+                        即 masked multi-head self-attention and ADD(残差)
+                    2. query = self.norms[0](query)
+                        即 LayerNorm
+                    3. query = self.attentions[1](query, key, value, None, query_pos, key_pos, ...)
+                        即 cross-attention and ADD(残差)
+                    4. query = self.norms[1](query)
+                        即 LayerNorm
+                    5. query = self.ffns[0](query)
+                        即 FFN and ADD(残差)
+                    6. query = self.norms[2](query)
+                        即 LayerNorm
+                    7. 返回query
+
+        综上, 对于TransformerLayerSequence有, self.layers.__len__() == 6, 
+        每个self.layers[i] 对应一个 DetrTransformerDecoderLayer, 其实就是一个 BaseTransformerLayer
+            一个 BaseTransformerLayer 对应('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+            即self.layers[i].attentions.__len__() == 2, 即 self_attn 和 cross_attn
+            即self.layers[i].norms.__len__() == 3, 即 norm, norm, norm
+            即self.layers[i].ffns.__len__() == 1, 即 ffn
+    
+    3. Detr3DTransformer.forward(mlvl_feats: 长度为[mlvl], 每个元素是 [B, N, C, H_lvl, W_lvl], 
+            query_embed: [num_query, embed_dims*2] 是可学习参数, reg_branches=None, **kwargs):
+        query_pos, query = 将query_embed拆成两段，每段都是 [num_query, embed_dims], 如 [900, 256], 并expand成 [B, num_query, embed_dims]
+        reference_points = query_pos 经过 [num_query, 3] 的线性层 与 sigmoid 获取, 尺寸为 [B, num_query, 3]
+        query_pos, query 都view成 [num_query, B, embed_dims]
+        self.decoder(query, key=None, value=mlvl_feats, query_pos=query_pos, reference_points=reference_points, reg_branches=reg_branches, **kwargs)
+            也就是 Detr3DTransformerDecoder.forward
+
+        我们看下 Detr3DTransformerDecoder.forward:
+            for lid, layer(即DetrTransformerDecoderLayer) in enumerate(self.layers):
+                output = layer的forward(上一层的output这一层的query， reference_points, ...)
+                如果配置了 with_box_refine, 会通过reg_branches[lid](output) 得到新的 reference_points
+                    注意其实现逻辑，原reference_points是sigmoid后的
+                    而通过reg_branches[lid](output) 回归的 reference_points偏移 是没有sigmoid 的
+                    所以有 
+                        new_reference_points = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
+                        new_reference_points[..., 2:3] = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
+                        new_reference_points = new_reference_points.sigmoid()
+                        这几句代码
+                    另外还要注意 reference_points = new_reference_points.detach() 也就说这些随着迭代变化的reference_points不会参与梯度回传
+                如果没配置，则reference_points一直保持不变
+            返回 output, reference_points
+                若配置了self.return_intermediate，则尺寸分别是 [6, num_query, B, embed_dims] 和 [6, B, num_query, 3]
+    
+    Detr3DTransformer.forward 会返回 inter_states, init_reference_out, inter_references_out
+        若配置了self.return_intermediate，则尺寸分别是 [6, num_query, B, embed_dims], [B, num_query, 3], [6, B, num_query, 3]
     """
 
     def __init__(self,
@@ -100,6 +180,11 @@ class Detr3DTransformer(BaseModule):
                 - inter_references_out: The internal value of reference
                     points in decoder, has shape
                     (num_dec_layers, bs, num_query, embed_dims)
+        
+        --------------------------------
+        关于这个expand，可以多了解一点，expand不是深拷贝，而是共用内存
+        另外，不用担心反向传播的问题，可以把expeand理解成一个线性变换，如 [x] -> [x; x; x],
+        其实就是 [1; 1; 1] * [x] = [x; x; x]
         """
         assert query_embed is not None
         bs = mlvl_feats[0].size(0)
@@ -315,6 +400,39 @@ class Detr3DCrossAtten(BaseModule):
                 points with shape (bs, num_query, 3)
         Returns:
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
+
+        --------------------------------
+        torch.nan_to_num: nan->0, inf->max, -inf->min
+
+        1. 输入 query: [B, num_query, embed_dims], reference_points: [B, num_query, 3]
+            key直接赋值为query, 而query+=query_pos
+        2. reference_points_3d, output, mask = feature_sampling(...) 返回reference_points在图像上对应的特征(双线性插值)
+            reference_points_3d 就是 reference_points, shape [B, num_query, 3]
+            output 是 [B, embed_dims, num_query, num_cam, 1, num_levels]
+            mask 是 [B, 1, num_query, num_cam, 1, 1] 投影到图像内为true, 否则为false
+        3. self.attention_weights 是 [embed_dims, num_cams * num_points * num_levels] 带bias的线性层
+            attention_weights = self.attention_weights(query)
+                结果会转成 [B, 1, num_query, num_cams, num_points, num_levels]
+                并sigmoid得到 [B, 1, num_query, num_cams, num_points, num_levels]
+            即通过线性层决定attention weights
+            权重不是通过 Query 和 Key 计算余弦相似度得出的，而是直接由一个线性层对 Query 进行预测。
+            它决定了该 Query 对不同相机 (num_cams)、不同采样点 (num_points) 和 不同特征层 (num_levels) 的重视程度    
+        4. 加权融合: 即对一个query，将其在不同相机、不同采样点、不同特征层上的value加权融合
+            attention_weights = attention_weights.sigmoid() * mask
+            output = output * attention_weights
+            output = output.sum(-1).sum(-1).sum(-1) # 依次对 levels, points, cams 求和
+            尺寸为 [B, num_query, embed_dims], permute后为 [embed_dims, B, num_query]
+        5. output = self.output_proj(output)
+            线性投影层，其目的： 前面步骤通过 feature_sampling 从多张图像中采样的特征（经过求和融合后），其通道分布可能与 Query 原始的特征空间不一致。
+                通过这个线性投影层，让模型学会如何“消化”这些从图像里捡出来的像素特征，将其转化为物体的高层语义
+        6. pos_feat = self.position_encoder(inverse_sigmoid(reference_points_3d)).permute(1, 0, 2)
+            inverse_sigmoid将[0,1]区间的reference_points_3d 反向映射回逻辑空间
+            将这个 refpt 通过多层MLP生成对应的 3D 位置特征向量
+            shape为 [num_query, B, embed_dims]
+        7. self.dropout(output) + inp_residual + pos_feat
+            融合 attention output 和 3D位置特征向量, 以及残差, 返回 [num_query, B, embed_dims]
+
+        值得一提的是，DETR3D论文中提到的cross-attention，比这个还简单：query_{i+1} = output_i + query_i （残差连接）
         """
         if key is None:
             key = query
@@ -372,6 +490,18 @@ def feature_sampling(mlvl_feats,
             mask (Tensor): Determine whether the reference point \
                 has projected outsied of images, with shape \
                 (B 1 num_q N 1 1)
+
+    --------------------------------
+    ref_pt表示lidar坐标系下参考点，投影到图像上，并通过bilinear插值得到特征
+    
+    两个细节：
+    1. input ref_pt是通过sigmoid得到的[0, 1]范围，所以要通过pc_range转换到物理坐标下, 再做投影
+    2. F.grid_sample 会将输入坐标从xy[-1~1, -1~1]映射到[0~H, 0~W]范围
+
+    返回
+    ref_pt_3d: 就是input ref_pt, 值范围是[0,1]， shape [B, num_query, 3]
+    sampled_feats: 插值得到的特征， shape [B, embed_dims, num_query, num_cam, 1, mlvl]
+    mask: true表示哪些点投影到了图像内， shape [B, 1, num_query, num_cam, 1, 1]
     """
     lidar2img = [meta['lidar2img'] for meta in img_metas]
     lidar2img = np.asarray(lidar2img)

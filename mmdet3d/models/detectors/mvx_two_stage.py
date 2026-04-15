@@ -236,6 +236,7 @@ class MVXTwoStageDetector(Base3DDetector):
             [B, C,  ny/2, nx/2] -> 1x1 conv(C ->4C) -> lateral2 + upsample(merge1)   -> merge2
 
             其中upsample使用 F.interpolate(laterals[i], size=prev_shape, mode='nearest')实现的，即复制最近值
+            上采样后的加法 就是tensor的对应位置相加
 
             然后每层各过一个 3x3 conv:
             lateral0 -> 3x3 conv -> FPN_out0 [B, 4C, ny/8, nx/8]

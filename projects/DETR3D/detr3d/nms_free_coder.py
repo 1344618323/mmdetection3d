@@ -49,6 +49,14 @@ class NMSFreeCoder(BaseBBoxCoder):
                 Shape [num_query, 10].
         Returns:
             list[dict]: Decoded boxes.
+
+        ---------
+        不知道是特意设计,还是BUG,这个函数的返回可能造成 一个query返回多个pred
+
+        输入cls_scores[num_query, num_classes] 每个query的每个类别的得分,
+        通过topk返回其中 max_num(300) 个bbox_index (其中可能有重复)
+
+        经过pc_range 和 score_threshold 过滤后, 返回pred
         """
         max_num = self.max_num
 

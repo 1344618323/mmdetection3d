@@ -1924,6 +1924,30 @@ class RandomResize3D(RandomResize):
         check if scale is already set in results.
     2. During resizing, this class would modify the centers_2d
         and cam2img with ``results['scale']``.
+
+    ------------------------------------------------------------
+    做两件事：随机缩放图像，并改变相机内参(即内参3*3矩阵的前两行)
+    那么问题来了，后面怎么处理不同尺寸的图像？
+    我用AI查了下，具体细节用到再看代码吧
+    在 Det3DDataPreprocessor 中会调用 multiview_img_stack_batch，大致内容是：
+
+    对一批次数据
+    # | Sample | Original Image Size | Padded Image Size | Valid Ratio (H, W)      | Remark                                        |
+    # |--------|--------------------|-------------------|-------------------------|-----------------------------------------------|
+    # |   A    | (1080, 1920)       | (1088, 1920)      | (1080/1088, 1920/1920)  | Batch内最大，作为该batch的输入尺寸大小         |
+    # |   B    | (990, 1700)        | (1088, 1920)      | (990/1088, 1700/1920)   |                                               |
+    # |   C    | (720, 1280)        | (1088, 1920)      | (720/1088, 1280/1920)   | 大量 padding                                |
+
+    ceil(1080, 1920)/32*32 = 1088, 32是padding size divisor（可以自定义）
+    padding方式是：右和下填充0
+    valid ratio是：原始尺寸/padding后尺寸，会在后续网络中用于屏蔽padding区域，避免对网络造成影响
+
+    最后会通过
+    data_sample.set_metainfo({
+                        'batch_input_shape': batch_input_shape,
+                        'pad_shape': pad_shape
+                    })
+    写入这些信息
     """
 
     def _resize_3d(self, results: dict) -> None:
@@ -2204,6 +2228,10 @@ class PhotoMetricDistortion3D(PhotoMetricDistortion):
         contrast_range (sequence): range of contrast.
         saturation_range (sequence): range of saturation.
         hue_delta (int): delta of hue.
+    
+    ------------------------------------------------------------
+    类名应该是 PhotometricDistortion3D, photometric是光度的意思
+    随机亮度，随机对比度，随机饱和度，随机色调，随机通道交换
     """
 
     def transform(self, results: dict) -> dict:

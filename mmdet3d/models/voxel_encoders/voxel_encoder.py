@@ -439,6 +439,9 @@ class HardVFE(nn.Module):
         最后一层 [M, N, in] -> vfe -> [M, out] 注意其中使用的linearlayer参数为(in, out)
             MLP+BN+Relu后得到 [M,N,out], 然后进行max pooling, 得到[M, out]
 
+        再仔细想一下这个处理过程 MLP 对每个点使用同一权重, 而max pooling 将同一体素内所有点特征合并.
+        这个组合使得无论输入的点特征怎么排序, 最后得到的体素级特征都是一样的. 这正是我们想要的
+
         TODO: fusion_layer 的相关处理还没看到, 暂时跳过
         """
         features_ls = [features]

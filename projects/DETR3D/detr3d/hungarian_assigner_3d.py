@@ -36,6 +36,48 @@ class HungarianAssigner3D(BaseAssigner):
         reg_cost.
         iou_cost.
         pc_range: perception range of the detector
+
+    --------------------------------
+    self.cls_cost 是 mmdet.models.task_modules.assigners.match_cost.FocalLossCost
+        源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/task_modules/assigners/match_cost.py
+        作用：输入(cls_pred, gt_labels)
+            cls_pred 尺寸为 [num_query, num_classes]; gt_labels 尺寸为 [num_gt]取值为 0到num_classes-1
+            返回 (num_query, num_gt) 的 cost matrix, 如何计算的呢？
+            计算每个query 作为第i（取值范围为0到num_classes-1）类的正样本的FocalLossCost： pos_cost，即一个[num_query, num_classes]的向量
+            再计算每个query 作为第i类的负样本的FocalLossCost： neg_cost，即一个[num_query, num_classes]的矩阵
+                
+                focalloss公式= -(\alpha*y+(1-\alpha)*(1-p_t))^{\gamma}log(p_t)
+                y=1时，即作为正样本时 pos_cost=-(\alpha)*(1-p)^{\gamma}log(p)
+                y=0时，即作为负样本时 neg_cost=-(1-\alpha)*(p)^{\gamma}log(1-p)
+
+            最后 cls_cost = pos_cost - neg_cost
+                表示将一个query从 i类 转为 非i类 的cost，cost越小越容易匹配
+
+            我们只关注num_classes这些类中，属于gt_labels的那些类，即有 cls_cost = pos_cost[:, gt_labels] - neg_cost[:, gt_labels]
+                一个 [num_query, num_gt] 的矩阵
+            所以 cost[j, i] 含义就是 索引为j的query 与 索引为i的gt 类别 匹配的cost
+
+    self.reg_cost 是 projects.DETR3D.detr3d.match_cost.BBox3DL1Cost
+        torch.cdist(bbox_pred, gt_bboxes, p=1) 计算 bbox_pred 和 gt_bboxes 两两之间的 L1 距离
+            cost(i,j)= \sum_{k=0}^{8} |bbox_pred[i][k] - gt_bboxes[j][k]|, 包括xyz log(lwh) sin(rot) cos(rot)
+        
+        k=0,1,2,3,4,5,6,7 分别对应 x,y,z,l,w,h,sin(rot),cos(rot)
+
+    ---
+    self.iou_cost （没有用） 是 mmdet.models.task_modules.assigners.match_cost.IoUCost
+        源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/task_modules/assigners/match_cost.py
+    ---
+
+    最后用于计算匈牙利匹配的cost矩阵：
+        cost = cls_cost + reg_cost, 前者权重默认2，后者权重默认0.25
+    使用 from scipy.optimize import linear_sum_assignment 求解，cost越小越容易匹配
+    
+    最后返回 AssignResult，包含：
+        num_gts: 目标框数量
+        assigned_gt_inds: 每个预测框分配的gt索引，0表示背景(作为样本)，正数表示gt索引(1-based)
+            注意这个+1只是约定，源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/task_modules/samplers/sampling_result.py 中
+                可以看到 self.pos_assigned_gt_inds = assign_result.gt_inds[pos_inds] - 1，即又减回去了
+        labels: 每个预测框分配的gt类别，-1表示未分配，>=0表示gt类别
     """
 
     def __init__(self,

@@ -31,6 +31,39 @@ class DETR3D(MVXTwoStageDetector):
             Defaults to None.
         init_cfg (dict, optional): Initialize config of
             model. Defaults to None.
+
+    -------------------------------------------------------------
+    整体梳理下DETR3D的流程
+
+    loss:
+        1. extract_feat:
+            grid_mask(仅trianing时)， 即 GridMask Data Augmentation
+            img_backbone，即 ResNet
+            img_neck，即 FPN
+        2. pts_bbox_head.forward，即 DETR3DHead.forward
+        3. pts_bbox_head.loss_by_feat
+    predict:
+        1. extract_feat
+        2. pts_bbox_head.forward
+        3. pts_bbox_head.predict_by_feat
+
+    -------------------------------------------------------------
+    DETR3DHead.forward:
+        1. Detr3DTransformer.forward:
+            1. query_embed 拆成 query_pos 和 query
+            2. query 经过 linear+sigmoid 得到 reference_points
+            3. Detr3DTransformerDecoder.forward 不断迭代query和reference_points:
+                6测过迭代：
+                    1. DetrTransformerDecoderLayer.forward: 即self_attn->norm->Detr3DCrossAtten->norm->ffn->norm
+                    2. 输出query，输入对应reg_branch + reference_points 得到新的reference_points
+        2. 6组独立的cls_branches/reg_branches使用Detr3DTransformer.forward的输出作forward
+
+    DETR3DHead.loss_by_feat:
+        1. HungarianAssigner3D 匹配 pred 与 gt
+        2. sigmoid focal loss 计算 cls loss; l1 loss 计算 reg loss
+
+    DETR3DHead.predict_by_feat:
+        1. NMSFreeCoder 筛选出其中分最高的bbox (没有NMS)
     """
 
     def __init__(self,
@@ -65,6 +98,34 @@ class DETR3D(MVXTwoStageDetector):
 
         Returns:
              list[tensor]: multi-level image features.
+
+        -------------------------------------------------------------
+        self.img_backbone 是 mmdet.models.backbones.resnet.ResNet 类的一个实例, 
+            源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/backbones/resnet.py
+            输入 [B*N, C, H, W], 如nuScenes的图像输入shape是 [1*6, 3, 928, 1600]
+            输出 长度为4的列表, 每个元素的shape是 
+                [B*N, 256, H/4, W/4], 如 [1*6, 256, 232, 400]
+                [B*N, 512, H/8, W/8], 如 [1*6, 512, 116, 200]
+                [B*N, 1024, H/16, W/16], 如 [1*6, 1024, 58, 100]
+                [B*N, 2048, H/32, W/32], 如 [1*6, 2048, 29, 50]
+        
+        self.img_neck 是 mmdet.models.necks.fpn.FPN 类的一个实例,
+            源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/necks/fpn.py
+            若配置 in_channels=[256, 512, 1024, 2048],
+                out_channels=256,
+                start_level=1,
+                num_outs=4,
+            则输出 长度为4的列表, 每个元素的shape是 
+                [B*N, 256, H/8, W/8], 如 [1*6, 256, 116, 200]
+                [B*N, 256, H/16, W/16], 如 [1*6, 256, 58, 100]
+                [B*N, 256, H/32, W/32], 如 [1*6, 256, 29, 50]
+                [B*N, 256, H/64, W/64], 如 [1*6, 256, 15, 25]
+        
+        extract_img_feat 最终返回 长度为4的列表, 每个元素的shape是 
+            [B, N, 256, H/8, W/8], 如 [1, 6, 256, 116, 200]
+            [B, N, 256, H/16, W/16], 如 [1, 6, 256, 58, 100]
+            [B, N, 256, H/32, W/32], 如 [1, 6, 256, 29, 50]
+            [B, N, 256, H/64, W/64], 如 [1, 6, 256, 15, 25]
         """
 
         B = img.size(0)

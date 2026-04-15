@@ -32,6 +32,90 @@ class DETR3DHead(DETRHead):
         code_weights (List[double]) : loss weights of
             (cx,cy,l,w,cz,h,sin(φ),cos(φ),v_x,v_y)
         code_size (int) : size of code_weights
+
+    ------------------------------
+    父类 DETRHead 源码: /opt/conda/lib/python3.8/site-packages/mmdet/models/dense_heads/detr_head.py
+        插曲:
+            self.positional_encoding 是 mmdet.models.layers.positional_encoding.SinePositionalEncoding
+                源码: /opt/conda/lib/python3.8/site-packages/mmdet/models/layers/positional_encoding.py
+                但在 DETR3DHead 中，并没有使用
+
+    DETR3DHead 会复用部分 DETRHead.__init__ 构造的东西，但没全用:
+    self.bbox_coder 是 projects.DETR3D.detr3d.nms_free_coder.NMSFreeCoder
+    self.transformer 是 Detr3DTransformer
+    self.assigner 是 projects.DETR3D.detr3d.hungarian_assigner_3d.HungarianAssigner3D
+    self.loss_cls 是 mmdet.models.losses.focal_loss.FocalLoss 源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/losses/focal_loss.py
+    self.loss_bbox 是 mmdet.models.losses.smooth_l1_loss.L1Loss 源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/losses/smooth_l1_loss.py
+    self.loss_iou(没用，但记录下) 是 mmdet.models.losses.iou_loss.GIoULoss 是 源码 /opt/conda/lib/python3.8/site-packages/mmdet/models/losses/iou_loss.py
+
+    DETR3DHead新加的:
+    self.sampler 是 mmdet3d.models.task_modules.samplers.pseudosample.PseudoSampler
+    -------
+
+    如果配置 with_box_refine=True 且 as_two_stage = False, 则
+        self.cls_branches 和 self.reg_branches 会配置独立的 6 层（因为 self.transformer 有 6 层）, 每层都是 fc_cls 和 reg_branch 的副本
+        fc_cls 的结构是 Linear(256, 256), LayerNorm(256), ReLU, ..., Linear(256, num_classes)
+        reg_branch 的结构是 Linear(256, 256), ReLu, ..., Linear(256, box_code_size)
+
+    forward流程:
+        hs, init_reference, inter_references = self.transformer(...)
+            hs尺寸为 [6, num_query, B, embed_dims] 6是decoder transformer layer的层数, hs应该是 hidden states的缩写
+            init_reference尺寸为 [B, num_query, 3]
+            inter_references尺寸为 [6, B, num_query, 3]
+    
+        最后返回 outs = {
+            'all_cls_scores': outputs_classes,
+            'all_bbox_preds': outputs_coords,
+            'enc_cls_scores': None,
+            'enc_bbox_preds': None,
+        }
+        outputs_classes 尺寸为 [6, B, num_query, num_classes]
+        outputs_coords 尺寸为 [6, B, num_query, code_size]
+            其中 [0,1,4]是真实物理坐标系下的xyz坐标：由reg计算的偏移+reference_points得到
+    
+    loss_by_feat流程:
+        multi_apply(self.loss_by_feat_single(...) 每个decoder layer的输出会进入
+            self.get_targets(...)
+                multi_apply(self._get_target_single, ...) 每个样本的输出会进入
+                    最终通过HungarianAssigner3D，匹配pred与gt
+                    返回 (labels, label_weights, bbox_targets, bbox_weights, pos_inds, neg_inds)
+                        labels [num_query] 每个query的标签，0-based, 如果值为num_classes, 则表示背景
+                        label_weights [num_query] 每个query的标签权重，1.0
+                        bbox_targets [num_query, code_size] 每个query的回归目标
+                        bbox_weights [num_query, code_size] 只有正样本的各个属性为1.0，其余为0
+                        pos_inds [num_pos] 正样本索引
+                        neg_inds [num_neg] 负样本索引
+                
+                self.get_targets(...)最后返回，并在self.loss_by_feat_single使用的是
+                labels: [B*num_query] 每个query的标签
+                label_weights: [B*num_query]
+                bbox_targets: [B*num_query, code_size]
+                bbox_weights: [B*num_query, code_size]
+                num_total_pos: int 正样本数量
+                num_total_neg: int 负样本数量
+
+            注意到对loss有 num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item() 这个函数
+            from mmdet.utils import reduce_mean 这个函数用于跨卡同步，计算平均值，为啥这样做？
+            寻常做法：各卡各自算loss，各自反传算梯度，最后跨卡同步平均梯度（等价于各卡各算loss，跨卡算平均loss，反传算梯度）
+            而这里会跨卡算cls_avg_factor，这是一种更“先进、现代”的归一化策略
+            * 比如有的batch的pos_inds特别多，有的batch的pos_inds特别少，有的batch的pos_inds为0，
+                在不跨卡的情况下，后者算loss的分母会变得极小（甚至需要加个 eps 避震），导致这帧图产生的微弱背景噪声被无限放大，产生巨大的随机梯度。
+            * 跨卡同步后，即使这张卡没目标，它也会共享全局的分母。这使得“没目标”的卡能以正确的比例贡献它的背景梯度，而不会带歪整个模型。
+            * 这种做法让 “多卡训练” 在数学逻辑上无限接近于 “单卡超大 Batch 训练”
+
+            loss_cls = sigmoid focal loss，所有正样本query/负样本（背景）query都会参与
+                预测张量输入为 [B*num_query, num_classes]，通道只包含前景类，不单独包含背景通道
+                标签labels取值范围为 0..num_classes，其中 num_classes 表示背景
+                在 mmdet.models.losses.focal_loss.FocalLoss 中 会先构造 (num_classes+1) one-hot 再截断到前 num_classes；
+                即对于每个query,有 num_classes 个loss的计算; 其中，对于背景类query, num_classes 个loss全是作为负样本计算的
+            
+            loss_bbox = l1 loss 仅正样本query参与
+        最后返回一个dict: 包含每层decoder的 loss_cls 和 loss_bbox
+    
+    predict_by_feat流程:
+        经过前面的foward, 对每个样本得到 [num_query, num_classes] 的 cls_scores 
+        (推理时decoder依然是每层transformer layer有独立的cls/reg branch, 但只用最后一层cls/reg branch的forward结果),
+        通过projects.DETR3D.detr3d.nms_free_coder.NMSFreeCoder 筛选出其中分最高的bbox(没有NMS)
     """
 
     def __init__(

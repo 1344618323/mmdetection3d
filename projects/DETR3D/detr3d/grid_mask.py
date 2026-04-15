@@ -77,6 +77,10 @@ class Grid(object):
 
 
 class GridMask(nn.Module):
+    """
+    ref: GridMask Data Augmentation https://arxiv.org/abs/2001.04086 
+    在源图上随机画棋盘格(棋盘整体也会有旋转), 将棋盘格区域替换为全黑, 达到数据增强的效果.
+    """
 
     def __init__(self,
                  use_h,

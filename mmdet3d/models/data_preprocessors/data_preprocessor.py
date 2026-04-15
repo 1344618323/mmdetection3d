@@ -174,6 +174,19 @@ class Det3DDataPreprocessor(DetDataPreprocessor):
 
         Returns:
             dict: Data in the same format as the model input.
+
+        ------------------------------------------------------------
+        函数名可能有迷惑性，这个函数其实是处理一个批次的数据
+
+        其中 self.collate_data 内有：
+        1. self.cast_data：仅将 Tensor 上传 self.device
+        2. 按需 BGR<->RGB，减均值除方差。对于nuscenes数据集，是用opencv读的，所以是BGR格式，且不做这个转换
+        3. batch 内 pad 对齐并 stack。
+
+        最后返回一个字典
+        batch_inputs 对应 {'imgs': [B,V,C,H,W], 'points': points, 'voxels': voxel_dict} 各种tensor
+        data_samples 对应一个长度为B的list，每个元素是<class 'mmdet3d.structures.det3d_data_sample.Det3DDataSample'> 对象，
+            该对象中存有 gt，内外参，数据增强标志 等信息
         """
         if 'img' in data['inputs']:
             batch_pad_shape = self._get_pad_shape(data)
