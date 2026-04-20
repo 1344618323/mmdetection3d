@@ -41,6 +41,15 @@ class PETRTransformer(BaseModule):
             TransformerDecoder. Defaults to None
         init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
             Defaults to None.
+    
+    --------------------------------
+    默认配置
+    self.encoder = None
+    self.decoder 是 PETRTransformerDecoder 的obj, 其父类为 TransformerLayerSequence
+        即6层 PETRTransformerDecoderLayer 的obj, 其父类为 BaseTransformerLayer
+            PETRTransformerDecoderLayer 的 默认配置是 ('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')
+            self.self_attn 对应 mmcv.cnn.bricks.transformer.MultiheadAttention
+            self.cross_attn 对应 PETRMultiheadAttention 这个类也是 MultiheadAttention 的封装
     """
 
     def __init__(self, encoder=None, decoder=None, init_cfg=None, cross=False):
@@ -285,6 +294,24 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
 
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
+        
+        --------------------------------
+        默认配置会进 
+        import torch.utils.checkpoint as cp
+        cp.checkpoint(...)
+        这个分支
+
+        cp.checkpoint 核心机制：
+        正常前向会保存很多中间激活用于反向。
+        但用 checkpoint(function, *args) 包住后，这段前向在 no_grad 下跑，不保存中间激活，只保存输入和函数信息。
+        到反向传播时，再把这段 function 重算一次前向（这次会跟踪梯度），再求梯度。
+        即“多算一次前向”来换显存，从而减小 OOM 风险。
+
+        对于dropout这类随机算子，torch.utils.checkpoint.checkpoint(..., preserve_rng_state=True)（默认一般就是 True）
+        会在第一次前向时保存 RNG 状态，反向重算时恢复，所以随机结果（如 dropout）可对齐
+
+        preserve_rng_state=True 保存的数据绑定在 PyTorch Autograd 计算图的上下文对象 ctx 中，绝对不存文件。
+        原因：磁盘 IO 延迟是内存的 10^4 ∼ 10^5 倍。若每次重算都读写文件，训练速度会下降几个数量级，彻底违背 checkpoint 省显存保速度 的初衷
         """
 
         if self.use_checkpoint and self.training:

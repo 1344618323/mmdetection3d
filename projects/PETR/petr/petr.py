@@ -20,6 +20,28 @@ from .grid_mask import GridMask
 @MODELS.register_module()
 class PETR(MVXTwoStageDetector):
     """PETR."""
+    """
+    loss(...):
+        1. self.extract_feat:
+            self.img_backbone 是VoVNetCP, 
+                输入是(B*N, 3, H, W), 如 (1*6, 3, 320, 800), 
+                输出是(B*N, 768, H/16, W/16)和(B*N, 1024, H/32, W/32)
+            self.img_neck 是CPFPN, 注释中写到 This FPN remove unused parameters which can used with checkpoint
+                输出是(B*N, 256, H/16, W/16)和(B*N, 256, H/32, W/32)
+            最后返回一个长度为2的list, 装了两个tensor:
+                [B, N, 256, H/16, W/16], 如 [1, 6, 256, 20, 50]
+                [B, N, 256, H/32, W/32], 如 [1, 6, 256, 10, 25]
+        2. self.forward_pts_train:
+            self.pts_bbox_head 是 PETRHead
+            1. self.pts_bbox_head.forward:
+            2. self.pts_bbox_head.loss_by_feat:
+    -------------------------------------------------------------
+    predict(...):
+        1. self.extract_feat:
+        2. self.simple_test_pts:
+            1. self.pts_bbox_head.forward:
+            2. self.pts_bbox_head.get_bboxes:
+    """
 
     def __init__(self,
                  use_grid_mask=False,

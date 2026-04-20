@@ -36,6 +36,26 @@ class SinePositionalEncoding3D(BaseModule):
             Defaults to 0.
         init_cfg (dict or list[dict], optional): Initialization config dict.
             Default: None
+
+    --------------------------------
+    sine/cosine PE 公式：
+        PE(p, i) = sin(p / \omega_i) i是偶数even
+        PE(p, i) = cos(p / \omega_i) i是奇数odd
+    pos 位置索引；i 维度索引
+    \omega_i = 10000**(2 * (i // 2) / num_pos_feats)
+    num_pos_feats 是维度大小，即i的取值范围是[0, num_pos_feats-1]
+    回到代码中
+
+    输入：
+        mask [B, N, H, W]
+    not_mask [B, N, H, W] 1表示有效位置，0表示无效位置
+    n_embed [B, N, H, W] 沿N维的位置索引，沿着这个维度，值依次是0, 1, 2, ..., N-1
+    y_embed [B, N, H, W] 沿H维的位置索引
+    x_embed [B, N, H, W] 沿W维的位置索引
+    若使用了normalize，会对位置索引作归一化处理
+        对 n_embed, 有 n_embed = (n_embed + offset) / (n_embed_max + eps) * 2pi
+    
+    最后返回 pos [B, N, num_pos_feats*3, H, W] 作为位置编码
     """
 
     def __init__(self,

@@ -267,7 +267,8 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=4,
+    # 4090: lidar-only 6; lidar-cam 2
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
@@ -313,7 +314,10 @@ val_evaluator = dict(
     backend_args=backend_args)
 test_evaluator = val_evaluator
 
-vis_backends = [dict(type='LocalVisBackend')]
+vis_backends = [
+    dict(type='LocalVisBackend'),
+    dict(type='TensorboardVisBackend'),
+]
 visualizer = dict(
     type='Det3DLocalVisualizer', vis_backends=vis_backends, name='visualizer')
 

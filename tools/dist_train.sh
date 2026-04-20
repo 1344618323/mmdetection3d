@@ -4,7 +4,7 @@ CONFIG=$1
 GPUS=$2
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
-PORT=${PORT:-29500}
+PORT=${PORT:-29501}
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 
 export NCCL_P2P_DISABLE=1
@@ -124,4 +124,26 @@ class DetDataPreprocessor(ImgDataPreprocessor):
 
 bash tools/dist_train.sh projects/DETR3D/configs/detr3d_r101_gridmask_cbgs.py 6 --cfg-options load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/detr3d/fcos3d.pth \
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/detr3d_r101_gridmask_cbgs
+
+训练PETR
+bash tools/dist_train.sh projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py 8 \
+    --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320 \
+    --cfg-options load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/petr/fcos3d_vovnet_imgbackbone-remapped.pth
+
+测试PETR
+bash tools/dist_test.sh projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py \
+    /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320/epoch_24.pth 8 \
+    --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug
+
+训练BEVFusion
+1. lidar-only
+bash tools/dist_train.sh projects/BEVFusion/configs/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py 8 \
+    --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d
+
+2. lidar-cam
+bash tools/dist_train.sh projects/BEVFusion/configs/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py 8 \
+    --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d \
+    --cfg-options load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d/epoch_20.pth \
+    model.img_backbone.init_cfg.checkpoint=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/bevfusion/swint-nuimages-pretrained.pth
+
 COMMENT

@@ -26,6 +26,19 @@ from projects.PETR.petr.utils import normalize_bbox
 
 
 def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
+    """
+    sine/cosine position encoding. 这一步没有任何可学习参数
+    sine/cosine PE 公式：
+        PE(p, i) = sin(p / \omega_i) i是偶数even
+        PE(p, i) = cos(p / \omega_i) i是奇数odd
+    pos 位置索引；i 维度索引
+    \omega_i = 10000**(2 * (i // 2) / num_pos_feats)
+    num_pos_feats 是维度大小，即i的取值范围是[0, num_pos_feats-1]
+    回到代码中
+
+    进入这个函数时 pos 每个值的取值范围是[0, 1]，会转到 [0, 2pi]
+    最后返回 posemb，（900, 384） 的tensor, 即900个3dpoint，每个3dpoint对应384维特征
+    """
     scale = 2 * math.pi
     pos = pos * scale
     dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=pos.device)
@@ -73,6 +86,108 @@ class PETRHead(AnchorFreeHead):
             transformer head.
         init_cfg (dict or list[dict], optional): Initialization config dict.
             Default: None
+
+    -------------------------------------------------------------
+    self.assigner 是 projects.PETR.petr.hungarian_assigner_3d.HungarianAssigner3D 
+        和 projects.DETR3D.detr3d.hungarian_assigner_3d.HungarianAssigner3D 实现是一样的
+    self.sampler 是 mmdet3d.models.task_modules.samplers.pseudosample.PseudoSampler
+    
+    self.forward(...)
+        x = self.input_proj(mlvl_feats[0]) 是 shape为 [B, N, embed_dims, H, W] 的Tensor, 如 [1, 6, 256, 20, 50]
+            self.input_proj 是 Conv2d(256, 256, kernel_size=1, stride=1) 用于将fpn通道数 映射到 transformer embed_dims 的投影层
+
+        mask大小为 [B, N, H, W], 如(B, N, 320, 800) 值为1的元素会被忽略, 值为0的元素会参与计算
+            会先通过 F.interpolate 将mask大小调整为与mlvl_feats[0]一致, 如(B, N, 20, 50)
+        
+        获取像素3D位置编码
+            coords_position_embeding = self.position_embeding(mlvl_feats) 给mlvl_feats[0]的像素坐标生成position_embeding
+                (注意, 只要图像尺寸/内外参/各种配置参数不变, 那么coords_position_embeding经position_encoder前的输入coords3d是完全固定的!!!)
+            sin_embed = self.positional_encoding(masks) 是shape为 [B, N, 384, H, W] 的Tensor
+                self.positional_encoding 是 projects.PETR.petr.positional_encoding.SinePositionalEncoding3D 对象,
+                    其实现似乎与 mmdet.models.layers.positional_encoding.SinePositionalEncoding 有些不同, 
+                    具体没仔细看, 似乎添加了3D方面的东西, 有空再说吧.
+                    不过二者都没有可学习参数
+            sin_embed 经过 self.adapt_pos3d(1*1卷积->relu->1*1卷积), 得到sin_embed, 是shape为 [B, N, embed_dims, H, W] 的Tensor, 如 [1, 6, 256, 20, 50]
+            pos_embed = sin_embed + coords_position_embeding 得到最后的PE, shape为 [B, N, embed_dims, H, W]
+        
+        获取query位置编码
+            self.reference_points: nn.Embedding(self.num_query 即900, 3)，其weight会通过[0,1]均一分布初始化 
+            query_embeds = self.query_embedding(pos2posemb3d(reference_points))
+                经过 sine/cosine position encoding 得到 [900, 384] 的tensor
+                再经过 self.query_embedding(1*1卷积->relu->1*1卷积), 得到 [900, 256] 的tensor
+                因此 query_embeds 是 [900, 256] 的tensor
+            reference_points 复制B份，得到 [B, 900, 3] tensor
+
+            关于query PE, 论文的消融实验 Query Generator 一节中提到了4种设计。
+                碎碎念，虽然论文中叫query生成，但在代码中其实是指query PE生成
+                四种实现，除了第一种，其他三种的实现方式都是我问AI的，论文并没有具体说
+            1. Learned-3D, 即代码中的实现方式：
+                1.1. reference_points 来自 nn.Embedding. 其中 reference_points 是 可学习的, 会先用[0,1]均一分布初始化
+                1.2. query PE = MLP(sine/cosine PE(reference_points))
+            2. None
+                2.1 query PE 来自 nn.Embedding
+            3. Fix-BEV
+                3.1 reference_points 取自一个xy网格，均一分布，z取一固定值
+                3.2 query PE = MLP(sine/cosine PE(reference_points))
+            4. Fix-3D
+                4.1 reference_points 取自一个xyz网格，均一分布
+                4.2 query PE = MLP(sine/cosine PE(reference_points))
+            论文的消融实验结果：Learned-3D 效果最好
+
+        outs_dec = self.transformer(x, mask, query_embeds, pos_embed)
+            self.transformer 是 projects.PETR.petr.petr_transformer.PETRTransformer 的obj, 其forward方法会返回 out_dec, memory
+            输入：
+                x: mlvl_feats[0]通过self.input_proj投影后 [B, N, embed_dims, H, W] tensor ，作为cross_attn的key和value.
+                    而在petrhead中，mlvl_feats[1]是没有参与的
+                mask: 作为 multiheadattention 的 key_padding_mask, [B, N, H, W] 的tensor, 值为1的元素会被忽略, 值为0的元素会参与计算
+                query_embeds: [num_query, embed_dims] 的tensor，作为query的PE
+                pos_embed: [B, N, embed_dims, H, W] 的 tensor， 作为key的PE
+                另外，最初的query是 shape为[num_query, embed_dims] 的 0 tensor
+                
+            输出：outs_dec 是 [num_layers, B, num_query, embed_dims] 的tensor, 即6层decoder的输出
+
+        outs_dec 分别经过 self.cls_branches 和 self.reg_branches 得到 cls_scores 和 bbox_preds，
+        最后返回
+        outs = {
+            'all_cls_scores': 长度为num_pred的list, 每个元素是 [B, num_query, num_classes] 的tensor
+            'all_bbox_preds': 长度为num_pred的list, 每个元素是 [B, num_query, code_size] 的tensor
+            'enc_cls_scores': None,
+            'enc_bbox_preds': None,
+        }
+        self.cls_branches 和 self.reg_branches 配置和 DETR3DHead 是一样的
+
+    self.loss_by_feat(...): 这一部分和DETR3D是一样的
+        multi_apply(self.loss_by_feat_single, ...) 分别处理一个decoder layer的输出:
+            self.get_targets(...):
+                multi_apply(self._get_target_single, ...): 分别匹配每一个样本的gt和det
+            每个decoder layer都会使用self.loss_cls(FocalLoss) 和 self.loss_bbox(L1Loss) 计算loss
+        最后返回 loss_dict
+
+    self.get_bboxes(...): 这一部分和DETR3D是一样的
+
+    -------------------------------------------------------
+    attention map 可视化
+    论文的visualization一节提到了attention map可视化，我很好奇是怎么实现的，拷打了下AI，结论如下：
+    在最后一层decoder layer的cross-attn中：
+    query [num_query, B, embed_dims]
+    key [N*H*W, B, embed_dims]
+    有 attention score = softmax(query * key^T / sqrt(embed_dims)), 是一个 [num_query, B, N*H*W] 的tensor
+    即每个样本的每个query对应一个 N*H*W 的tensor，对于N个相机，我们可以将其上采样到原图尺寸，可视化出来。
+    
+    但注意，通常我们用的是多头attention，可视化的attn map 一般是 多头 attn map 的平均。
+    就像torch API
+    attn = nn.MultiheadAttention(
+        embed_dim=256,   # 输入特征的总维度 (例如 256)
+        num_heads=8,     # 注意力头的数量 (必须能被 embed_dim 整除)
+        ...
+    )
+    attn_output, attn_output_weights = attn(
+                query=query,
+                key=key,
+                value=value,
+                average_attn_weights=True
+    )
+    输出的attn_output_weights 是一个 [num_query, B, N*H*W] 的tensor
     """
     _version = 2
 
@@ -325,6 +440,60 @@ class PETRHead(AnchorFreeHead):
                 nn.init.constant_(m[-1].bias, bias_init)
 
     def position_embeding(self, img_feats, img_metas, masks=None):
+        """
+        作用：给mlvl_feats[0]的每个像素生成position_embeding
+
+        对于depth的采样, CaDNN 和 PETR 在取bin时, 有几种不同配置
+        if self.LID: 
+            使用LID, Linear Increasing Discretization 线性递增离散化, 深度方向上的 bin 宽度随深度大致线性增大 (近处更密、远处更疏)
+            第1个bin, 长度为 d, 第2个bin长度为 2d, ..., 第n个bin长度为 n*d
+            假如有n个bin, 总长为 (1+n)*n/2 *d = dmax-dmin
+            d = (dmax-dmin) / ((1+n)*n/2)
+            截至到第i个bin, 总长为 d+2d+...+id + dmin = d*i*(i+1)/2 + dmin = i(i+1) * (dmax-dmin)/(n(n+1)) + dmin
+        else:
+            则采用 UD (Uniform Discretization 均匀离散化), 即深度bin是均匀的, 等于 (dmax-dmin)/n
+            第1个bin, 长度为 d, 第2个bin长度为 d, ..., 第n-1个bin长度为 d
+            截至到第i个bin, 总长为 i * d + dmin = i/n * (dmax-dmin) + dmin
+
+        论文的消融实验中对PETR with LID、PETR with UD做了比较，发现效果差不多
+
+        回到代码中
+
+        最后获取的coords, 是shape为 [B, N, W, H, D, 4, 1] 的Tensor, 如 [1, 6, 50, 20, 64, 4, 1]
+            W, H, D 分别对应图像的宽度(0, 16, 32, ..., 800), 高度(0, 16, 32, ..., 320), 深度(1, 1.0289, 1.0868, ..., 59,3477)
+            最后一维4, 是齐次坐标, 表示某一个像素坐标对应的 (Du, Dv, D, 1)
+        而coords3d = img2lidars @ coords, 是shape为 [B, N, W, H, D, 3] 的Tensor, 如 [1, 6, 50, 20, 64, 3]
+            最后一维3, 即对应每一个像素坐标的lidar3D坐标, 如 (x, y, z), 会归一化到 [0, 1] 范围
+        
+        给coord3d 在像素层面打码:
+            对于最后一维的xyz, 要在[0,1]范围内. 对每一个像素有 D 个bin, 一共 (D, 3)个坐标.
+            如果 (D, 3) 个值中在[0, 1]范围内的数量 > 0.5D, 则认为该像素有效, 保留
+            最后 coords_mask 和 mask 与操作, 得到 [B, N, H, W] 的 tensor
+            值得一提的是, coords_mask 压根没用,不知道是不是bug? 
+        
+        coords3d 会转成 [B*N, D*3, H, W] 的tensor, 如 [1*6, 64*3, 20, 50]
+            并使用inverse_sigmoid, 将(0,1)映射到(-inf, inf)
+
+        值得一提的是, 只要 img_feats 的尺寸、img_metas 中的内外参与配置参数保持不变，
+            coords3d 的输出就是完全固定（确定性）的!!!
+        
+        coord3d 经过 self.position_encoder(1*1卷积->relu->1*1卷积), 得到coords_position_embeding, 
+            是shape为 [B*N, embed_dims, H, W] 的Tensor, 如 [6, 256, 20, 50]的tensor,
+            即每个mlvl_feat的像素坐标, 都对应一个 embed_dims 维的向量
+
+        论文的消融实验中特意提到了 self.position_encoder 的设计, 有三种设计
+        1. 无
+        2. 1*1卷积->relu->1*1卷积
+        3. 3*3卷积->...
+        方案2相比方案1，mAP/NDS 均有提升
+        方案3相比方案1都是副作用，导致mAP/NDS接近0。论文认为3*3卷积会破坏 3D坐标与2D像素的关联
+
+        另外论文还讨论了 key 和 keyPE 的融合方式：
+        1. add
+        2. concat
+        3. dot product
+        实验结果： add/concat 效果差不多，dot product 效果最差
+        """
         eps = 1e-5
         pad_h, pad_w = img_metas[0]['pad_shape']
         B, N, C, H, W = img_feats[self.position_level].shape
@@ -453,6 +622,20 @@ class PETRHead(AnchorFreeHead):
         # interpolate masks to have the same spatial shape with x
         masks = F.interpolate(masks, size=x.shape[-2:]).to(torch.bool)
 
+        """
+        self.with_position, self.with_multiview 要结合论文的消融实验来看，用于决定给mlvl_feats[0]的每个像素生成
+
+        self.with_position: 
+            true: 给mlvl_feats[0]的每个像素生成3DPE
+            false: 不生成3DPE
+        self.with_multiview: 
+            true: 给mlvl_feats[0]的每个像素生成2DPE 考虑N维度
+            false: 各个相机分别给mlvl_feats[0]的每个像素生成2DPE，再concat到一起
+        最后PE=3DPE+2DPE
+
+        实验结果： with_position=True, with_multiview=True 时效果最好，但是主要提升还是来自3DPE
+        """
+        
         if self.with_position:
             coords_position_embeding, _ = self.position_embeding(
                 mlvl_feats, img_metas, masks)
@@ -465,8 +648,8 @@ class PETRHead(AnchorFreeHead):
             else:
                 pos_embeds = []
                 for i in range(num_cams):
-                    xy_embed = self.positional_encoding(masks[:, i, :, :])
-                    pos_embeds.append(xy_embed.unsqueeze(1))
+                    xy_embed = self.positional_encoding(masks[:, i:i+1, :, :])
+                    pos_embeds.append(xy_embed)
                 sin_embed = torch.cat(pos_embeds, 1)
                 sin_embed = self.adapt_pos3d(sin_embed.flatten(0, 1)).view(
                     x.size())
@@ -479,8 +662,8 @@ class PETRHead(AnchorFreeHead):
             else:
                 pos_embeds = []
                 for i in range(num_cams):
-                    pos_embed = self.positional_encoding(masks[:, i, :, :])
-                    pos_embeds.append(pos_embed.unsqueeze(1))
+                    pos_embed = self.positional_encoding(masks[:, i:i+1, :, :])
+                    pos_embeds.append(pos_embed)
                 pos_embed = torch.cat(pos_embeds, 1)
 
         reference_points = self.reference_points.weight
@@ -665,6 +848,15 @@ class PETRHead(AnchorFreeHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components for outputs
                 from a single decoder layer.
+        ------------------------------------------------------------
+        gt_bboxes_list 中各维度含义： cx cy cz l w h yaw vx vy
+        bbox_preds_list 中各维度含义： cx cy logl logw cz logh sin(yaw) cos(yaw) vx vy
+        但不要担心:
+        1. 在self.assigner.assign(...) 中算loss时，会将 gt_bboxes_list 转成
+            cx cy logl logw cz logh sin(yaw) cos(yaw) vx vy
+        2. self.loss_bbox前，也会就将 gt_bboxes_list 转成
+            cx cy logl logw cz logh sin(yaw) cos(yaw) vx vy
+        值得一提的是，这个 sin/cos 内其实还有一个 CCW（逆时针） <-> CW（顺时针） 的转换，具体见 utils.py 中的 normalize_bbox 和 denormalize_bbox
         """
         num_imgs = cls_scores.size(0)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
