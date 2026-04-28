@@ -432,7 +432,7 @@ class Detr3DCrossAtten(BaseModule):
         7. self.dropout(output) + inp_residual + pos_feat
             融合 attention output 和 3D位置特征向量, 以及残差, 返回 [num_query, B, embed_dims]
 
-        值得一提的是，DETR3D论文中提到的cross-attention，比这个还简单：query_{i+1} = output_i + query_i （残差连接）
+            值得一提的是，DETR3D论文中提到的cross-attention，比这个还简单：query_{i+1} = output_i + query_i （残差连接）
         """
         if key is None:
             key = query

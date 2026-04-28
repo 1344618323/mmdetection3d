@@ -424,3 +424,83 @@ class DepthLSSTransform(BaseDepthTransform):
         x = super().forward(*args, **kwargs)
         x = self.downsample(x)
         return x
+
+"""
+四个类 BaseViewTransform, LSSTransform, BaseDepthTransform, DepthLSSTransform
+LSSTransform, BaseDepthTransform 都继承自 BaseViewTransform
+LSSTransform 是传统的LSS实现, 没有添加lidar深度信息, 仅依靠图像特征进行深度估计, 应该是LSS https://arxiv.org/abs/2008.05711 的实现
+BaseDepthTransform 在LSS的基础上添加了lidar深度信息, 应该是BEVDepth https://arxiv.org/abs/2206.10092 的实现
+DepthLSSTransform 继承自 BaseDepthTransform
+    是否使用lidar深度信息,见
+    LSSTransform.get_cam_feats(self, x)
+    DepthLSSTransform.get_cam_feats(self, x, d):
+
+class DepthLSSTransform:
+def __init__:
+    这里会把其父类的构造成成员也写上
+    self.dx, self.bx, self.nx = gen_dx_bx(xbound, ybound, zbound)
+        dx是每个体素的尺寸 [0.3, 0.3, 20] m, 即xyz方向的体素尺寸
+        bx是每个轴向的起点体素中心坐标 [-53.85, -53.85, 0] m 
+        nx是每个轴向的体素数量 [360, 360, 1]
+    self.frustum [118, 32, 88, 3] 
+        写几个值就知道其含义了:
+        self.frustum[0,0,0,:] = tensor([0., 0., 1.])
+        self.frustum[1,1,1,:] = tensor([8.0805, 8.2258, 1.5000])
+        self.frustum[-1,-1,-1,:] = tensor([703.0000, 255.0000,  59.5000])
+        x方向为linspace(0, 704-1, 88)
+        y方向为linspace(0, 256-1, 32)
+        z方向为arange(1, 60, 0.5)
+
+def forward:
+    x = BaseDepthTransform.forward(img, points, lidar2image, cam_intrinsic, camera2lidar, img_aug_matrix, lidar_aug_matrix, metas):
+        输入
+        img: [B, N, 256, 32, 88] FPN的第0层输出
+        points: List[torch.Tensor], 每个sample的点云, 是一个[N, 5]的tensor, 是增强后的点云, 记为pla
+        lidar2image: [B, N, 4, 4] 雷达到图像的变换矩阵(原始外参*原始K), 记为 M_l2i
+        cam_intrinsic: [B, N, 4, 4] 相机内参(原始K)
+        img_aug_matrix: [B, N, 4, 4] 相机内参增强矩阵, 记为Mimg
+        camera2lidar: [B, N, 4, 4] 相机到雷达的变换矩阵(原始外参)
+        lidar_aug_matrix: [B, 4, 4] 雷达内参增强矩阵, 记为ML
+
+        1. 将点云映射到增强后的图像坐标系
+            pla = Ml @ pl, pl为原始点云
+            pl=Ml^-1 @ pla
+            pimg = M_l2i @ pl
+            pimga = Mimg @ pimg, pimga 为增强后的图像坐标
+
+            最后depth的shape为 [B, N, 1, 256, 704]: 将原始点云映射到增强后的图像坐标系后, 计算每个像素对应的深度, 没有投影点的像素值设置成0
+
+        2. geom = BaseViewTransform.get_geometry:
+            用于将 self.frustum (增强后img坐标) 转到 增强后lidar坐标系下, 返回shape为 [B, N, 118, 32, 88, 3]
+            注意, geom 没有任何学习参数, 且若内外参/增强矩阵不发生变化(但在训练过程中增强矩阵会发生变化), 则geom 也不发生变化
+        
+        3. x = DepthLSSTransform.get_cam_feats(x, d)
+            输入
+            x: [B, N, 256, 32, 88] FPN的第0层输出
+            d: [B, N, 1, 256, 704] 将原始点云映射到增强后的图像坐标系后, 计算每个像素对应的深度, 没有投影点的像素值设置成0
+
+            d = self.dtransform(d) 经过多层卷积, 得到[B*N, 64, 32, 88]
+            x = cat(x, d) 得到[B*N, 320, 32, 88]
+            x = self.depthnet(x) 经过多层卷积, 得到[B*N, 256, 198, 32, 88]
+            
+            ---
+            值得一提的是, 相比 LSSTransform.get_cam_feats(self, x) , 
+            DepthLSSTransform.get_cam_feats(self, x, d) 多出的就是 d = self.dtransform(d), x = cat(x, d) 这两句代码
+            ---
+
+            将depth维度的198维分成两部分 [0:118] 和 [118:198], 前者用于depth的softmax, 后者作为语义特征
+            depth = x[:, :self.D].softmax(dim=1) 
+            x = depth.unsqueeze(1) * x[:, self.D:(self.D + self.C)].unsqueeze(2), 得到 [B*N, 80, 118, 32, 88]
+            
+        4. x = BaseViewTransform.bev_pool(geom, x)
+            输入
+            geom: [B, N, 118, 32, 88, 3] 视锥在增强后lidar坐标系下的坐标
+            x: [B, N, 80, 118, 32, 80] 增强后图像坐标系下的语义特征
+            
+            使用的论文中提到的高效bevpooling算法，具体怎么高效的，有空再仔细阅读
+            
+            输出 [B, 80, 360, 360]
+
+    x = self.downsample(x): 一系列2D卷积， 得到 [B, 80, 180, 180]
+    return x
+"""

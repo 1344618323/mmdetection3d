@@ -26,6 +26,7 @@ class SECONDFPN(BaseModule):
             [dict(type='Kaiming', layer='ConvTranspose2d'),
              dict(type='Constant', layer='NaiveSyncBatchNorm2d', val=1.0)].
     
+    -------------------------------------------------------------
     对于deconv而言, 若kernel_size=2, stride=2, 其处理是:
     将input撑大, 输入的每个相邻像素之间插入 stride - 1 个零
     比如 input = A B

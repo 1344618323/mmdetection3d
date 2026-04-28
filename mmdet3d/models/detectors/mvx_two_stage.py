@@ -251,7 +251,7 @@ class MVXTwoStageDetector(Base3DDetector):
             即直接将体素内所有点的特征求平均, 得到体素级特征
             输入的 voxel_dict['voxels'] 是 [M, N, C] M个体素(该batch一共M个体素), 体素内最大点数N, 点特征维度C（一般为5），输出为[M, C]
         2. pts_middle_encoder配置为SparseEncoder, 源码 mmdet3d/models/middle_encoders/sparse_encoder.py 稀疏3D卷积
-            输入[M,C]: 以默认配置为例 sparse_shape=[41, 1440, 1440]，8倍下采样，z方向再多一次2倍下采样，
+            输入[M,C]: 以默认配置为例 sparse_shape=[41, 1440, 1440](表示3D网格zxy方向的数量)，8倍下采样，z方向再多一次2倍下采样，
             最后返回[B, C*D, H, W]的tensor
         3. pts_backbone: SECOND, 源码 mmdet3d/models/backbones/second.py
             输出一个tuple:

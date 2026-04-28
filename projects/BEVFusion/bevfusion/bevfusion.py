@@ -296,3 +296,96 @@ class BEVFusion(Base3DDetector):
         losses.update(bbox_loss)
 
         return losses
+
+"""
+---------------------------------------------------------------------
+train_pipeline 对比lidar-only和lidar-cam的差异, 我们看到不同模态的数据增强方式有些不同
+for lidar-only                  for lidar-cam
+---------------------------------------------------------------------
+                                BEVLoadMultiViewImageFromFiles
+                                    这个类继承自LoadMultiViewImageFromFiles, 区别不大,
+                                    父类记录了 cam2img, lidar2cam
+                                    子类额外记录了 cam2lidar, lidar2img
+LoadPointsFromFile              LoadPointsFromFile
+LoadPointsFromMultiSweeps       LoadPointsFromMultiSweeps
+LoadAnnotations3D               LoadAnnotations3D
+ObjectSample
+    补充采样gt和点云, 只能用于lidar-only                    
+                                ImageAug3D
+                                    对图像做resize, crop, flip, rotate, 并记录img_aug_matrix
+GlobalRotScaleTrans             BEVFusionGlobalRotScaleTrans
+                                    继承自GlobalRotScaleTrans(修改点云和GT), 多记录了lidar_aug_matrix
+BEVFusionRandomFlip3D           BEVFusionRandomFlip3D
+    我感觉lidar-only中直接用RandomFlip3D也行, 
+    毕竟不涉及相机和lidar的转换
+                                    类似RandomFlip3D, 但新增lidar_aug_matrix=R@lidar_aug_matrix
+                                    R是 前后 或 左右 翻转带来的矩阵
+PointsRangeFilter               PointsRangeFilter
+ObjectRangeFilter               ObjectRangeFilter
+ObjectNameFilter                ObjectNameFilter
+                                GridMask
+PointShuffle                    PointShuffle
+Pack3DDetInputs                 Pack3DDetInputs
+
+---------------------------------------------------------------------
+
+def loss(...):
+    1. feats =self.extract_feat(...):
+        if lidarncam:
+            img_feature = self.extract_img_feat(imgs, ...):
+                x=self.img_backbone(x) mmdet.models.backbones.swin.SwinTransformer (TODO)
+                    输入[B*N, C, H, W], 如 [6, 3, 256, 704]
+                    输出
+                        [B*N, 192, H/8, W/8], 如 [6, 192, 32, 88]
+                        [B*N, 384, H/16, W/16], 如 [6, 384, 16, 44]
+                        [B*N, 768, H/32, W/32], 如 [6, 768, 8, 22]
+                self.img_neck(x) projects.BEVFusion.bevfusion.bevfusion_necks.GeneralizedLSSFPN, 是FPN-LSS的实现
+                    输出
+                        [B*N, 256, H/8, W/8], 如 [6, 256, 32, 88]
+                        [B*N, 256, H/16, W/16], 如 [6, 256, 16, 44]
+                x = self.view_transform(x, points, lidar2image, camera_intrinsics, camera2lidar, img_aug_matrix, lidar_aug_matrix, img_metas) 
+                    projects.BEVFusion.bevfusion.bevfusion.view_transform.DepthLSSTransform
+                    就是LSS中的lift+splat实现，但对bevpooling进行了优化，且参照bevdepth有引入lidar points
+                    最后返回 [B, 80, 180, 180]
+                return x
+        pts_feature = self.extract_pts_feat(...)
+            feats, coords, sizes = self.voxelize(points):
+                对每个样本的点云体素化 ret = self.pts_voxel_layer(res) projects.BEVFusion.bevfusion.ops.voxel.voxelize.Voxelization
+                并整合成:  
+                feats [M, C] 该批次共M个体素, 每个体素使用一个C维度的特征
+                coords [M, 4] 该批次共M个体素, 每个体素使用一个4维度的坐标: (batch_idx, z_idx, y_idx, x_idx)
+                sizes [M] 该批次共M个体素, 每个体素内有多少个点
+            x = self.pts_middle_encoder(feats, coords, batch_size) projects.BEVFusion.bevfusion.sparse_encoder.BEVFusionSparseEncoder
+                其实就是SECOND的pts_middle_encoder
+                输入的空间尺寸为 [1440, 1440, 41] (表示3D网格zxy方向的数量) 由[-54.0,-54.0,-5.0,54.0,54.0,3.0]/[0.075,0.075,0.2]求得
+                输出的空间尺寸为 [180, 180, 2] 8倍下采样(在pts_middle_encoder中的conv_out层会对z方向再多一次2倍下采样)
+                最终返回 [B, D*C, H, W] 的tensor, 举个例子: [1, 2*128, 180, 180]
+            return x
+        if lidarncam:
+            x=fusion_layer(img_feature, pts_feature) 
+                projects.BEVFusion.bevfusion.fusion_layer.FusionLayer
+                过程非常简单 conv2d(cat(img_feature, pts_feature)) 输出 [B, 256, 180, 180]
+        x = self.pts_backbone(x)  mmdet3d.models.backbones.second.SECOND
+            其实SECOND的pts_backbone, 简单的多段2D卷积网络, 输出一个tuple:
+            [B, 128, 180, 180]
+            [B, 256, 90, 90]
+        x = self.pts_neck(x) mmdet3d.models.necks.second_fpn.SECONDFPN
+            其实就是SECOND的pts_neck, 返回一个长度为1的tuple, 元素尺寸为 [1, 512, 180, 180]
+        return x
+    
+    2. bbox_loss = self.bbox_head.loss(feats, ...) 
+        projects.BEVFusion.bevfusion.transfusion_head.TransFusionHead
+
+    3. return bbox_loss
+
+
+def parse_losses(...):
+    重写了 BaseModel.parse_losses, 并没有改变算法, 只是修改了log_vars中loss的计算方式:
+        在BaseModel.parse_losses, 只是统计当前rank的loss, 最后若没有啥特别配置, 在log中只输出了 rank0 的loss(不过是一段时将内的平滑值)
+        在这里, 会算一个所有rank平均的loss, 最后在log中输出
+
+
+def predict(...):
+    1. feats =self.extract_feat(...):
+    2. self.bbox_head.predict(feats, ...)
+"""

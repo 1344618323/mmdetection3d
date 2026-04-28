@@ -104,8 +104,7 @@ class PETRHead(AnchorFreeHead):
                 (注意, 只要图像尺寸/内外参/各种配置参数不变, 那么coords_position_embeding经position_encoder前的输入coords3d是完全固定的!!!)
             sin_embed = self.positional_encoding(masks) 是shape为 [B, N, 384, H, W] 的Tensor
                 self.positional_encoding 是 projects.PETR.petr.positional_encoding.SinePositionalEncoding3D 对象,
-                    其实现似乎与 mmdet.models.layers.positional_encoding.SinePositionalEncoding 有些不同, 
-                    具体没仔细看, 似乎添加了3D方面的东西, 有空再说吧.
+                    注意与 mmdet.models.layers.positional_encoding.SinePositionalEncoding 不同,见注释 
                     不过二者都没有可学习参数
             sin_embed 经过 self.adapt_pos3d(1*1卷积->relu->1*1卷积), 得到sin_embed, 是shape为 [B, N, embed_dims, H, W] 的Tensor, 如 [1, 6, 256, 20, 50]
             pos_embed = sin_embed + coords_position_embeding 得到最后的PE, shape为 [B, N, embed_dims, H, W]

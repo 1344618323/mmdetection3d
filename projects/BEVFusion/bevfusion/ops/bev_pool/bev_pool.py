@@ -81,6 +81,12 @@ class QuickCumsumCuda(torch.autograd.Function):
 
 
 def bev_pool(feats, coords, B, D, H, W):
+    """
+    ranks[i] 表示coords的一维索引
+    indices[i] 表示原数组ranks第i个元素在排序后的数组中的索引
+    feats, coords, ranks = feats[indices], coords[indices], ranks[indices]
+        是排序后的结果
+    """
     assert feats.shape[0] == coords.shape[0]
 
     ranks = (

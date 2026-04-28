@@ -356,6 +356,10 @@ class ObjectSample(BaseTransform):
             Defaults to False.
         use_ground_plane (bool): Whether to use ground plane to adjust the
             3D labels. Defaults to False.
+
+    ------------------------------------------------------------
+    使用 DataBaseSampler 从数据库中采样gt和点云.
+    并移除原帧点云中,落在新增gt内的点云; 再将补充采样的gt和点云加入原帧的gt和点云中
     """
 
     def __init__(self,

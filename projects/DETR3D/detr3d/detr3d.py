@@ -53,7 +53,7 @@ class DETR3D(MVXTwoStageDetector):
             1. query_embed 拆成 query_pos 和 query
             2. query 经过 linear+sigmoid 得到 reference_points
             3. Detr3DTransformerDecoder.forward 不断迭代query和reference_points:
-                6测过迭代：
+                6层迭代：
                     1. DetrTransformerDecoderLayer.forward: 即self_attn->norm->Detr3DCrossAtten->norm->ffn->norm
                     2. 输出query，输入对应reg_branch + reference_points 得到新的reference_points
         2. 6组独立的cls_branches/reg_branches使用Detr3DTransformer.forward的输出作forward

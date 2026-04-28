@@ -870,3 +870,163 @@ class TransFusionHead(nn.Module):
         loss_dict['matched_ious'] = layer_loss_cls.new_tensor(matched_ious)
 
         return loss_dict
+
+"""
+TransFusionHead
+def __init__:
+    self.bbox_sampler <mmdet.models.task_modules.samplers.pseudo_sampler.PseudoSampler> object
+    self.bbox_assigner <projects.BEVFusion.bevfusion.utils.HungarianAssigner3D> object
+    self.loss_cls <mmdet.models.losses.focal_loss.FocalLoss> object
+    self.loss_bbox <mmdet.models.losses.smooth_l1_loss.L1Loss> object
+    self.loss_heatmap <mmdet.models.losses.gaussian_focal_loss.GaussianFocalLoss> object
+    self.bev_pos 是一个 [1, 180*180, 2] 的tensor, 表示BEV空间中的坐标, 从 [0.5,0.5]到[179.5,179.5]
+    self.decoder 是多层（默认是1层）<projects.BEVFusion.bevfusion.transformer.TransformerDecoderLayer> object
+    self.prediction_heads 是多层（默认是1层）<mmdet3d.models.dense_heads.centerpoint_head.SeparateHead> object
+        里面会有多个不同的head, 如center, height, dim, rot, vel, heatmap
+
+def loss:
+    1. forward
+    preds_dicts = self.forward(batch_feats, batch_input_metas):
+        multi_apply(self.forward_single, feats, [metas]):
+            self.forward_single(inputs, ...): 单lvlfeature处理
+                输入inputs [B, 512, 180, 180]
+                
+                1. 降维
+                fusion_feat = self.shared_conv(inputs) 2D卷积，输出 [B, 128, 180, 180]
+                dense_heatmap = self.heatmap_head(fusion_feat.float()) 1x1卷积，输出 [B, 10, 180, 180]
+
+                2. 获取proposals:
+                heatmap = dense_heatmap.detach().sigmoid()
+                对heatmap做2D池化, 得到local_max
+                heatmap = heatmap * (heatmap == local_max) 基于maxpooling的非极大值抑制
+                top_proposals = heatmap.view(batch_size, -1).argsort(
+                    dim=-1, descending=True)[..., :self.num_proposals] 获取每个样本中分数最高的200个cell在C*H*W维度上的索引
+                top_proposals_class = top_proposals // heatmap.shape[-1] 获取每个样本中分数最高的200个cell的类别
+                top_proposals_index = top_proposals % heatmap.shape[-1] 获取每个样本中分数最高的200个cell在H*W维度上的索引
+                
+                3. 获取proposals的特征:
+                query_feat = fusion_feat_flatten.gather(
+                            index=top_proposals_index[:, None, :].expand(
+                                -1, fusion_feat_flatten.shape[1], -1),
+                            dim=-1,
+                        ) 获取每个样本中分数最高的200个cell在C*H*W维度上的特征（注意，是有可能出现某几个同一cell被选了多次的情况）
+                        其中 fusion_feat_flatten 是 fusion_feat view 后的结果
+                    即一个 [B, 128, 200] 的tensor, 表示每个样本中分数最高的200个cell的特征
+                self.query_labels = top_proposals_class [B, 200]
+
+                4. 获取proposals的类别编码，并加到proposals的特征中，目的：给每个 proposal 的 query 加类别先验嵌入，避免“同位置不同类别”的 query 完全一样
+                one_hot = F.one_hot(
+                    top_proposals_class,
+                    num_classes=self.num_classes).permute(0, 2, 1)
+                query_cat_encoding = self.class_encoding(one_hot.float()) 一个conv1d(10, 128)
+                query_feat += query_cat_encoding
+
+                5. 获取proposals的BEV2D位置编码
+                query_pos = bev_pos.gather(
+                    index=top_proposals_index[:, None, :].permute(0, 2, 1).expand(
+                        -1, -1, bev_pos.shape[-1]),
+                    dim=1,
+                ), 即一个 [B, 200, 2] 的tensor
+
+                6. transformer decoder
+                for i in range(self.num_decoder_layers):
+                    6.1 过一层transformer decoder
+                    query_feat = self.decoder[i](query_feat, key=fusion_feat_flatten, \
+                        query_pos=query_pos, key_pos=bev_pos)
+                        输入：
+                            query_feat: [B, 128, 200]
+                            key: [B, 128, 180*180]
+                            query_pos: [B, 200, 2]
+                            key_pos: [B, 180*180, 2]
+                        1. query_pos = self.self_posembed(query_pos) 两层conv1d
+                        2. key_pos = self.cross_posembed(key_pos) 两层conv1d
+                        3. 接着是标准的 self_attn->add->norm->cross_attn->add->norm->ffn->add->norm 的结构
+                            值得一提是，在self_attn中 value=query+query_pos，在cross_attn中， value=key+key_pos，这是与DETR不同的地方
+                    
+                    6.2 更新query_pos
+                    res_layer = self.prediction_heads[i](query_feat)
+                        self.prediction_heads[i] 是 <mmdet3d.models.dense_heads.centerpoint_head.SeparateHead> object
+                            按配置有: center, height, dim, rot, vel, heatmap 几个子头, 每个头都有两层conv2d
+                    res_layer['center']+=query_pos
+                    query_pos = res_layer['center'].detach().clone()
+
+                最后整合多层的 prediction_heads 输出
+
+    2. 匹配gt，算loss
+    loss = self.loss_by_feat(preds_dicts, batch_gt_instances_3d):
+        self.get_targets(batch_gt_instances_3d, preds_dicts[0]) 因为只有一层feat:
+            multi_apply(self.get_targets_single, ...):
+                self.get_targets_single(gt_instances_3d, preds_dict, ...): 每个样本单独处理
+                    输入 preds_dict, key-value为:
+                        首先是SeparateHead的输出
+                        center: [1, 2, 200*layer]
+                        height: [1, 1, 200*layer]
+                        dim: [1, 3, 200*layer]
+                        rot: [1, 2, 200*layer]
+                        vel: [1, 2, 200*layer]
+                        heatmap: [1, 10, 200*layer]
+                        以及
+                        query_heatmap_score: [1, 10, 200] proposal对应的 sigmoid后的dense_heatmap
+                        dense_heatmap: [1, 10, 180, 180] proposal来源的dense_heatmap(尚未sigmoid)
+
+                    boxes_dict = self.bbox_coder.decode(heatmap, rot, dim, center, height, vel) 
+                        分别回归200*layer个bbox
+                    
+                    for idx_layer in range(self.num_decoder_layers):
+                        每层都调用 self.bbox_assigner.assign(bboxes, gt_bboxes, ...)
+                            通过cls_focal_cost+bevxy cost + iou cost做匈牙利匹配    
+                    整理所有层的匹配结果(这意味比如有3层,那么最后有3*gt个正样本)
+                
+                    绘制 heatmap [1, 10, 180, 180]
+
+                    输出: 所有层的匹配结果, heatmap, 平均3diou(分母是正样本数量, 分子是所有正样本的3diou之和)
+
+        loss_heatmap = self.loss_heatmap(sigmoid(preds_dict['dense_heatmap']), heatmap)
+            两个输入都是 [B, 10, 180, 180] 的尺寸
+            是一 mmdet.models.losses.gaussian_focal_loss.GaussianFocalLoss obj
+            最后使用 heatmap.eq(1) (大致等于batch内正样本总数) 作为分母归一化
+
+        for idx_layer in range(self.num_decoder_layers):
+            每层都计算 loss_clayer_loss_clsls, layer_loss_bbox
+                layer_loss_cls = self.loss_cls(...) Focalloss 正负样本都参与
+                layer_loss_bbox = self.loss_bbox(...) mmdet.models.losses.smooth_l1_loss.L1Loss 正样本参与: 使用bbox encoder的格式算L1loss
+        
+        matched_ious = 所有层的3diou之和 / 正样本数量
+        
+        return loss_heatmap, 多层loss_cls, 多层loss_bbox, matched_ious(这一项不会加到最后的loss中, 只是用于监控)
+    
+    return loss
+
+
+def predict:
+    与loss时, 不同的是预测bbox的score的计算方式: 
+        其使用 one_hot(proposal cls) * pred['heatmap'] * pred['query_heatmap_score'] 作为分数(第三个时proposal分数), 有one_hot, 说明仅保留了proposal class
+        而算loss时, 仅使用了 pred['heatmap']
+    
+    nms(可选, 默认没有启用) 是各类别分别做nms, 以 nuscenes
+    1. 除 ped, cone 以外, 都不做nms
+    2. ped/cone 按配置可选 circle nms(以xy中心距离卡阈值) 或 bev2d rot nms(以bev rot iou卡阈值)
+--------------------------------
+
+简要梳理下其过程
+
+forward:
+在进入head前，融合得到bevfeat
+1. 这个bevfeat经过2D卷积，得到dense_heatmap 通道数为10，会基于gt做高斯分布绘制的heatmap的监督信号，做loss
+2. 获取proposal: 而这个dense_heatmap会做 基于maxpooling的非极大值抑制，筛出分最高的cell作为proposals
+3. 获取query: 从bevfeat中取proposal, 即 query_feat [128, 200], 
+    其中有些cell是在同一bev位置，只是类别不同，所以会想给每个query加一个类别先验(即proposal类别)嵌入，避免“同位置不同类别”的 query 完全一样
+    query_feat+=query_cat_encoding, 注意query_cat_encoding也是通过1x1卷积升维得到的
+    query_pos 天然就是bev空间中的坐标，注意在后面使用时，也会通过1*1卷积升维
+4. 接下来就是喜闻乐见的transformer环节了
+    self-attn:
+    cross-attn: key和value都是bevfeat
+    最后输出的query会经过prediction_head 
+    其中center head得到xy偏移, 叠加query_pos上, 得到修正后的query_pos (虽然默认配置只有1层transformer)
+    总之该层会输出 center(有个添加query_pos的后处理, 所以最后取值是大约在[0~180]左右), height, dim, rot, vel, heatmap 的结果
+
+loss:
+    1. assign: forward的结果会回归200个bbox, 通过cls focal loss + xy l1 loss + iou loss 与 gt 做匈牙利匹配
+    2. 绘制gt heatmap, 与 forward 最开始得到 dense_heatmap 做gaussian focal loss
+    3. det 与 gt的 cls focal loss + bbox l1 loss    
+"""

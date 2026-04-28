@@ -25,9 +25,9 @@ class SECOND(BaseModule):
 
     这是一个简单的多段2D卷积网络
     输入 [B, in_channels, H, W] ->
-    输出0 [B, out_channels[0], H/2, W/2] -> 
-    输出1 [B, out_channels[1], H/4, W/4] -> 
-    输出2 [B, out_channels[2], H/8, W/8]
+    输出0 [B, out_channels[0], H, W] -> 
+    输出1 [B, out_channels[1], H/2, W/2] -> 
+    输出2 [B, out_channels[2], H/4, W/4] -> ... (如果有那么多层的话)
     
     forward会将每一段的输出都返回, 用于后续的FPN处理
     """

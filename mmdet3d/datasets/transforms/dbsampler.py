@@ -21,6 +21,11 @@ class BatchSampler:
         epoch (int, optional): Sampling epoch. Defaults to None.
         shuffle (bool): Whether to shuffle indices. Defaults to False.
         drop_reminder (bool): Drop reminder. Defaults to False.
+    
+    ------------------------------------------------------------
+    关键的变量:
+    _name: 某个类型
+    _sampled_list: 每个元素对应一个dict,该dict用于存储某个gtins在某一帧中的信息
     """
 
     def __init__(self,
@@ -94,6 +99,13 @@ class DataBaseSampler(object):
             dict(type='LoadPointsFromFile', load_dim=4, use_dim=[0, 1, 2, 3]).
         backend_args (dict, optional): Arguments to instantiate the
             corresponding backend. Defaults to None.
+
+    ------------------------------------------------------------
+    self.sample_all(...):
+        输入单帧的gt_bboxes_3d和gt_labels_3d
+        根据配置的self.sample_groups, 决定需要补充的类别和数量.
+        会从self.sampler_dict (一个key-value为 类别名-BatchSampler 的字典) 中采样, 
+        并将新采样后的gt和点云写入返回值
     """
 
     def __init__(self,

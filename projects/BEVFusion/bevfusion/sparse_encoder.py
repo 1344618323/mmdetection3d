@@ -39,6 +39,9 @@ class BEVFusionSparseEncoder(SparseEncoder):
             Defaults to 'conv_module'.
         return_middle_feats (bool): Whether output middle features.
             Default to False.
+
+    -------------------------------------------------------------
+    这个类的算法和 mmdet3d/models/middle_encoders/sparse_encoder.py 中 class SparseEncoder 是一样
     """
 
     def __init__(self,

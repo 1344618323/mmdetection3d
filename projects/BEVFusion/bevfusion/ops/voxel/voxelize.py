@@ -82,6 +82,14 @@ voxelization = _Voxelization.apply
 
 
 class Voxelization(nn.Module):
+    """
+    class Voxelization 和 class _Voxelization 的功能 
+    和 mmdet3d/models/data_preprocessors/voxelize.py 中的 class VoxelizationByGridShape 和 class _Voxelization 的功能是一样的。
+    这里在 projects/BEVFusion/bevfusion/ops/voxel/src 实现了 hard_voxelize，
+    而 mmdet3d/models/data_preprocessors/voxelize.py 中则是调用了 mmcv.utils.ext_loader 中的实现（也是so文件），估计算法原理是一致的。
+
+    值得一提的是 _Voxelization 只实现了 forward, 没有实现 backward, 这是因为调用这个类时，是在 torch.no_grad() 上下文环境中，所以不会计算梯度。
+    """
 
     def __init__(self,
                  voxel_size,

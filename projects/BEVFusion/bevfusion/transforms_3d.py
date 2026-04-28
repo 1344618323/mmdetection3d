@@ -12,6 +12,12 @@ from mmdet3d.registry import TRANSFORMS
 
 @TRANSFORMS.register_module()
 class ImageAug3D(BaseTransform):
+    """
+    可以和 projects/PETR/petr/transforms_3d.py 中的 ResizeCropFlipImage 对比下, 仅两点不同:
+    1. ImageAug3D 是各个相机分别 resize, crop, flip, rotate, 而 ResizeCropFlipImage 各相机则共用一套参数
+    2. ImageAug3D 记录data['img_aug_matrix']; 而 ResizeCropFlipImage 则是直接修改 cam2img: 
+        results['cam2img'][i][:3, :3] = ida_mat @ results['cam2img'][i][:3, :3]
+    """
 
     def __init__(self, final_dim, resize_lim, bot_pct_lim, rot_lim, rand_flip,
                  is_train):

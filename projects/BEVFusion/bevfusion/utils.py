@@ -14,6 +14,22 @@ from mmdet3d.registry import TASK_UTILS
 
 @TASK_UTILS.register_module()
 class TransFusionBBoxCoder(BaseBBoxCoder):
+    """
+    encode:
+    xy编码成featuremap坐标, 比如featuremap是180*180, 那么xy就是[0,180]之间
+    dim: log
+    height: 中心坐标
+    rot: sin(rot) cos(rot)
+    vel: 不变
+
+    decode:
+    xy解码成物理坐标
+    dim: 物理坐标
+    height: 底面坐标
+    rot: rad
+    vel: 不变
+    对于预测的decode, 会过滤掉分数低,取不在bevrange内的bbox
+    """
 
     def __init__(
         self,
@@ -247,6 +263,18 @@ class HeuristicAssigner3D(BaseAssigner):
 
 @TASK_UTILS.register_module()
 class HungarianAssigner3D(BaseAssigner):
+    """
+    核心逻辑是cost计算:
+    1. cls_cost focalloss [200, N]
+    2. reg_cost bboxl1 [200, N] 
+        self.reg_cost 是个 projects.BEVFusion.bevfusion.utils.BBoxBEVL1Cost object, 
+        对xy会归一化到[0,1]再计算l1距离, 其他bbox维度不考虑
+    3. iou_cost [200, N]
+        self.iou_cost 是个 projects.BEVFusion.bevfusion.utils.IoU3DCost object
+        其结果是取 mmdet3d.structures.ops.iou3d_calculator.BboxOverlaps3D (用于计算3D iou) 的负数
+
+    注意和mmdet3d project中DETR3D/PETR的cost计算逻辑的区别: DETR3D/PETR 在regcost中会考虑除xy外的其他维度, 但没有考虑iou
+    """
 
     def __init__(self,
                  cls_cost=dict(type='ClassificationCost', weight=1.),

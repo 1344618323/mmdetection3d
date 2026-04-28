@@ -26,14 +26,26 @@
                 // "--cfg-options", "load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/detr3d/fcos3d.pth",
                 // "train_dataloader.batch_size=1"
                 //////////////PETR//////////////////
-                "projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py",
-                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug",
-                "--cfg-options", "load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/petr/fcos3d_vovnet_imgbackbone-remapped.pth",
-                "train_dataloader.batch_size=1",
-                "train_dataloader.num_workers=1"
-                //////////////BEVFusion lidar-only//////////////////
+                // "projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py",
+                // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug",
+                // "--cfg-options", "load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/petr/fcos3d_vovnet_imgbackbone-remapped.pth",
+                // "train_dataloader.batch_size=1",
+                // "train_dataloader.num_workers=1"
+                ////////////BEVFusion lidar-only//////////////////
                 // "projects/BEVFusion/configs/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py",
                 // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d_debug",
+                // "--cfg-options",
+                // "train_dataloader.batch_size=1",
+                // "train_dataloader.num_workers=0",
+                // "train_dataloader.persistent_workers=False"
+                //////////////BEVFusion lidar-camera//////////////////
+                "projects/BEVFusion/configs/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py",
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d_debug",
+                "--cfg-options", "load_from=/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d/epoch_20.pth",
+                "model.img_backbone.init_cfg.checkpoint=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/bevfusion/swint-nuimages-pretrained.pth",
+                "train_dataloader.batch_size=1",
+                "train_dataloader.num_workers=0",
+                "train_dataloader.persistent_workers=False"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0",
@@ -67,12 +79,21 @@
                 // "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/detr3d_r101_gridmask_cbgs/epoch_24.pth",
                 // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/detr3d_r101_gridmask_cbgs_debug",
                 //////////////PETR//////////////////
-                "projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py",
-                "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320/epoch_24.pth",
-                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug",
+                // "projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py",
+                // "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320/epoch_24.pth",
+                // "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug",
+                // "--cfg-options",
+                // "test_dataloader.batch_size=1",
+                // "test_dataloader.num_workers=1"
+                //////////////BEVFusion lidar-cam//////////////////
+                "projects/BEVFusion/configs/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py",
+                "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d/epoch_6.pth",
+                "--work-dir", "/mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar-cam_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d_debug",
                 "--cfg-options",
+                "model.img_backbone.init_cfg.checkpoint=/mnt/intel/jupyterhub/xinning/mmdet3d_pretrain/bevfusion/swint-nuimages-pretrained.pth",
                 "test_dataloader.batch_size=1",
-                "test_dataloader.num_workers=1"
+                "test_dataloader.num_workers=0",
+                "test_dataloader.persistent_workers=False"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0, 1",

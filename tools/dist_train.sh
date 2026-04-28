@@ -136,6 +136,12 @@ bash tools/dist_test.sh projects/PETR/configs/petr_vovnet_gridmask_p4_800x320.py
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/petr_vovnet_gridmask_p4_800x320_debug
 
 训练BEVFusion
+需要注意的是mmdet3d官方提供的pth是用spconv2,而非mmcv自带的spconv1,为了和官方保持一致,我门也可先安装一下 `pip install spconv-cu113`.
+如何判断pth中用的是 spconv2还是spconv1?
+可以查看 pts_middle_encoder.conv_input.0.weight 的shape:
+MMCV/spconv1 常见核格式：(D,H,W,in_c,out_c)
+spconv2 常见核格式：(out_c,D,H,W,in_c), 如 [16, 3, 3, 3, 5]
+
 1. lidar-only
 bash tools/dist_train.sh projects/BEVFusion/configs/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d.py 8 \
     --work-dir /mnt/intel/jupyterhub/xinning/mmdet3d_work_dir/bevfusion_lidar_voxel0075_second_secfpn_8xb4-cyclic-20e_nus-3d

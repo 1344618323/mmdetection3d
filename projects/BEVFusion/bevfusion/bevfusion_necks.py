@@ -10,6 +10,23 @@ from mmdet3d.registry import MODELS
 
 @MODELS.register_module()
 class GeneralizedLSSFPN(BaseModule):
+    """
+    FPN-LSS 似乎是 BEVDet https://arxiv.org/abs/2112.11790 中提出的, 有空看下其实现是否与这里一致
+    input[2] -> upsample
+                |
+                V
+    input[1] -> cat -> conv1x1 -> conv3x3 -> laterals[1]
+                                                |
+                                                V
+                                    input[0]-> cat -> conv1x1 -> conv3x3 -> laterals[0]
+
+    总之与传统FPN不太一样, 在BEVDet的论文中似乎没有做完整的消融试验, 但是见tabel1, 设计了几种配置
+    Module:          BEVDet-Tiny  BEVDet-R50  BEVDet-R101
+    Input resolution: 704×256       704×256     704×256
+    Image-view Encoder: SwinTransformer-Tiny+FPN-LSS-512 / ResNet-50+FPN-512 / ResNet-101+FPN-256
+
+    在table7中,通过nus val数据集, 比较这三种img-view encoder的性能, 发现 SwinTransformer-Tiny+FPN-LSS-512 的性能最好
+    """
 
     def __init__(
             self,
